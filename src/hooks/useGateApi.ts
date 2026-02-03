@@ -55,13 +55,15 @@ export function useCurrencyPairs() {
   });
 }
 
-// Open Orders
+// Open Orders - Gate.io requires currency_pair parameter
+// When pair is not provided, the query is disabled
 export function useOpenOrders(pair?: string) {
   return useQuery({
     queryKey: ['gate', 'orders', pair],
-    queryFn: () => getOpenOrders(pair),
+    queryFn: () => getOpenOrders(pair!),
     refetchInterval: 3000,
     retry: 2,
+    enabled: !!pair, // Only fetch when pair is provided
   });
 }
 
