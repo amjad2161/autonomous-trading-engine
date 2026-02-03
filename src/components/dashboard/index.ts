@@ -8,3 +8,4 @@ export { TradeHistoryPanel } from "./TradeHistoryPanel";
 export { BacktestPanel } from "./BacktestPanel";
 export { ContinuousTradingPanel } from "./ContinuousTradingPanel";
 export { AutonomousControlPanel } from "./AutonomousControlPanel";
+export { TradingChatPanel } from "./TradingChatPanel";

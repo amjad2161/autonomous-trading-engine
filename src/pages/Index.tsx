@@ -8,7 +8,8 @@ import {
   OpportunitiesPanel,
   BacktestPanel,
   ContinuousTradingPanel,
-  AutonomousControlPanel
+  AutonomousControlPanel,
+  TradingChatPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -52,13 +53,18 @@ const Index = () => {
           {/* Mobile: Single column, Tablet: 2 columns, Desktop: 4 columns */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 sm:gap-4 pb-4">
             
-            {/* Autonomous Control Panel - PRIMARY */}
-            <div className="xl:col-span-3 h-auto min-h-[450px]">
+            {/* AI Chat Panel - PRIMARY */}
+            <div className="xl:col-span-4 h-auto min-h-[500px]">
+              <TradingChatPanel />
+            </div>
+            
+            {/* Autonomous Control Panel */}
+            <div className="xl:col-span-4 h-auto min-h-[450px]">
               <AutonomousControlPanel />
             </div>
             
             {/* Treasury Panel */}
-            <div className="xl:col-span-3 h-auto min-h-[350px]">
+            <div className="xl:col-span-4 h-auto min-h-[350px]">
               <TreasuryPanel />
             </div>
             
@@ -72,18 +78,13 @@ const Index = () => {
               <PositionsPanel />
             </div>
             
-            {/* Risk Control */}
-            <div className="xl:col-span-4 h-64 sm:h-80">
-              <RiskControlPanel />
-            </div>
-            
             {/* Opportunities */}
-            <div className="md:col-span-2 xl:col-span-4 h-64 sm:h-80">
+            <div className="xl:col-span-3 h-64 sm:h-80">
               <OpportunitiesPanel />
             </div>
             
             {/* Activity Log */}
-            <div className="xl:col-span-4 h-64 sm:h-80">
+            <div className="xl:col-span-3 h-64 sm:h-80">
               <ActivityLog />
             </div>
           </div>
