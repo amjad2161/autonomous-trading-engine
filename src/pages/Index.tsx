@@ -1,13 +1,48 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { DashboardLayout } from "@/components/layout";
+import { 
+  TreasuryPanel, 
+  PositionsPanel, 
+  RiskControlPanel, 
+  ActivityLog,
+  MarketOverview,
+  OpportunitiesPanel 
+} from "@/components/dashboard";
 
 const Index = () => {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
+    <DashboardLayout>
+      <div className="grid grid-cols-12 gap-4 h-[calc(100vh-7rem)]">
+        {/* Left Column - Treasury & Risk */}
+        <div className="col-span-3 flex flex-col gap-4">
+          <div className="flex-1 min-h-0">
+            <TreasuryPanel />
+          </div>
+          <div className="h-80">
+            <RiskControlPanel />
+          </div>
+        </div>
+        
+        {/* Center Column - Positions & Opportunities */}
+        <div className="col-span-6 flex flex-col gap-4">
+          <div className="flex-1 min-h-0">
+            <PositionsPanel />
+          </div>
+          <div className="h-80">
+            <OpportunitiesPanel />
+          </div>
+        </div>
+        
+        {/* Right Column - Market & Activity */}
+        <div className="col-span-3 flex flex-col gap-4">
+          <div className="flex-1 min-h-0">
+            <MarketOverview />
+          </div>
+          <div className="h-80">
+            <ActivityLog />
+          </div>
+        </div>
       </div>
-    </div>
+    </DashboardLayout>
   );
 };
 
