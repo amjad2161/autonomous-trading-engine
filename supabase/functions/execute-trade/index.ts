@@ -14,17 +14,23 @@ interface GateCredentials {
 
 interface ExecuteRequest {
   credentials: GateCredentials;
-  opportunityType: 'spread' | 'arbitrage';
+  opportunityType: 'spread' | 'arbitrage' | 'momentum' | 'breakout' | 'reversion' | 'volume_spike';
   symbol: string;
   side: 'buy' | 'sell';
   amount: string;
   price?: string;
-  route?: string[]; // For arbitrage: ['USDT', 'BTC', 'ETH', 'USDT']
+  route?: string[];
   
   // Risk parameters
-  maxTradeSize: number; // Max USDT per trade
-  minEdge: number; // Minimum edge percentage
+  maxTradeSize: number;
+  minEdge: number;
   expectedEdge: number;
+  
+  // Smart execution parameters
+  entryPrice: number;
+  targetPrice: number;
+  stopLoss: number;
+  slippageTolerance?: number; // Default 0.5%
 }
 
 interface TradeResult {
@@ -32,9 +38,13 @@ interface TradeResult {
   orderId?: string;
   executedAmount?: string;
   executedPrice?: string;
+  slippage?: number;
   error?: string;
   timestamp: number;
+  executionTime?: number;
 }
+
+// ============ UTILITY FUNCTIONS ============
 
 async function sha512Hash(message: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(message);
@@ -55,23 +65,131 @@ async function generateSignature(
   return createHmac('sha512', secret).update(signatureString).digest('hex');
 }
 
-async function placeOrder(
+async function getTicker(pair: string): Promise<{ bid: number; ask: number; last: number; volume: number } | null> {
+  const response = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${pair}`);
+  const data = await response.json();
+  
+  if (!data || data.length === 0) return null;
+  
+  return {
+    bid: parseFloat(data[0].highest_bid),
+    ask: parseFloat(data[0].lowest_ask),
+    last: parseFloat(data[0].last),
+    volume: parseFloat(data[0].quote_volume),
+  };
+}
+
+async function getOrderBook(pair: string, limit = 5): Promise<{ asks: [string, string][]; bids: [string, string][] } | null> {
+  const response = await fetch(`https://api.gateio.ws/api/v4/spot/order_book?currency_pair=${pair}&limit=${limit}`);
+  const data = await response.json();
+  
+  if (!data || !data.asks || !data.bids) return null;
+  
+  return data;
+}
+
+// ============ SMART ORDER PLACEMENT ============
+
+async function placeSmartOrder(
   credentials: GateCredentials,
   pair: string,
   side: 'buy' | 'sell',
   amount: string,
-  price: string
+  expectedPrice: number,
+  slippageTolerance: number
 ): Promise<TradeResult> {
+  const startTime = Date.now();
   const baseUrl = 'https://api.gateio.ws';
   const endpoint = '/api/v4/spot/orders';
+  
+  // Get current order book to optimize execution
+  const orderBook = await getOrderBook(pair);
+  const ticker = await getTicker(pair);
+  
+  if (!orderBook || !ticker) {
+    return {
+      success: false,
+      error: 'Failed to fetch market data',
+      timestamp: Date.now(),
+    };
+  }
+
+  // Calculate optimal price based on order book
+  let optimalPrice: number;
+  
+  if (side === 'buy') {
+    // For buy: price should be at or slightly above best ask for immediate fill
+    const bestAsk = parseFloat(orderBook.asks[0][0]);
+    const priceWithSlippage = expectedPrice * (1 + slippageTolerance / 100);
+    
+    // Use the lower of: best ask, expected price + slippage
+    optimalPrice = Math.min(bestAsk, priceWithSlippage);
+    
+    // Verify slippage is acceptable
+    const actualSlippage = ((optimalPrice - expectedPrice) / expectedPrice) * 100;
+    if (actualSlippage > slippageTolerance) {
+      return {
+        success: false,
+        error: `Slippage too high: ${actualSlippage.toFixed(3)}% > ${slippageTolerance}%`,
+        timestamp: Date.now(),
+        slippage: actualSlippage,
+      };
+    }
+  } else {
+    // For sell: price should be at or slightly below best bid
+    const bestBid = parseFloat(orderBook.bids[0][0]);
+    const priceWithSlippage = expectedPrice * (1 - slippageTolerance / 100);
+    
+    optimalPrice = Math.max(bestBid, priceWithSlippage);
+    
+    const actualSlippage = ((expectedPrice - optimalPrice) / expectedPrice) * 100;
+    if (actualSlippage > slippageTolerance) {
+      return {
+        success: false,
+        error: `Slippage too high: ${actualSlippage.toFixed(3)}% > ${slippageTolerance}%`,
+        timestamp: Date.now(),
+        slippage: actualSlippage,
+      };
+    }
+  }
+
+  // Check liquidity - ensure enough volume at price level
+  const tradeAmount = parseFloat(amount);
+  let availableLiquidity = 0;
+  const levels = side === 'buy' ? orderBook.asks : orderBook.bids;
+  
+  for (const level of levels) {
+    const levelPrice = parseFloat(level[0]);
+    const levelAmount = parseFloat(level[1]);
+    const levelValue = levelPrice * levelAmount;
+    
+    if (side === 'buy' && levelPrice <= optimalPrice) {
+      availableLiquidity += levelValue;
+    } else if (side === 'sell' && levelPrice >= optimalPrice) {
+      availableLiquidity += levelValue;
+    }
+    
+    if (availableLiquidity >= tradeAmount * 1.5) break; // 50% buffer
+  }
+
+  if (availableLiquidity < tradeAmount) {
+    return {
+      success: false,
+      error: `Insufficient liquidity: $${availableLiquidity.toFixed(2)} available vs $${tradeAmount.toFixed(2)} needed`,
+      timestamp: Date.now(),
+    };
+  }
+
+  // Place IOC order for immediate execution
+  const priceStr = optimalPrice.toFixed(8);
   
   const body = {
     currency_pair: pair,
     side,
     amount,
-    price,
+    price: priceStr,
     type: 'limit',
-    time_in_force: 'ioc', // Immediate-or-Cancel for quick execution
+    time_in_force: 'ioc', // Immediate-or-Cancel
   };
   
   const payloadString = JSON.stringify(body);
@@ -86,7 +204,7 @@ async function placeOrder(
     'Accept': 'application/json',
   };
 
-  console.log(`[Trade Executor] Placing ${side} order: ${amount} ${pair} @ ${price}`);
+  console.log(`[Trade Executor] Placing smart ${side} order: ${amount} ${pair} @ ${priceStr}`);
 
   const response = await fetch(`${baseUrl}${endpoint}`, {
     method: 'POST',
@@ -95,39 +213,118 @@ async function placeOrder(
   });
 
   const data = await response.json();
+  const executionTime = Date.now() - startTime;
 
   if (!response.ok) {
     console.error(`[Trade Executor] Order failed:`, data);
     return {
       success: false,
-      error: data.message || 'Order placement failed',
+      error: data.message || data.label || 'Order placement failed',
       timestamp: Date.now(),
+      executionTime,
     };
   }
 
-  console.log(`[Trade Executor] Order placed:`, data);
+  // Calculate actual slippage
+  const executedPrice = parseFloat(data.price || priceStr);
+  const slippage = side === 'buy' 
+    ? ((executedPrice - expectedPrice) / expectedPrice) * 100
+    : ((expectedPrice - executedPrice) / expectedPrice) * 100;
+
+  console.log(`[Trade Executor] Order executed in ${executionTime}ms, slippage: ${slippage.toFixed(4)}%`);
   
   return {
     success: true,
     orderId: data.id,
-    executedAmount: data.amount,
-    executedPrice: data.price,
+    executedAmount: data.amount || data.filled_total,
+    executedPrice: data.price || priceStr,
+    slippage,
+    timestamp: Date.now(),
+    executionTime,
+  };
+}
+
+// ============ ARBITRAGE EXECUTION ============
+
+async function executeArbitrage(
+  credentials: GateCredentials,
+  route: string[],
+  startAmount: number,
+  slippageTolerance: number
+): Promise<TradeResult> {
+  console.log(`[Trade Executor] Executing arbitrage: ${route.join(' → ')}`);
+  
+  // Verify route is still profitable
+  const pairs: { pair: string; side: 'buy' | 'sell' }[] = [];
+  
+  // Build trade pairs from route
+  for (let i = 0; i < route.length - 1; i++) {
+    const from = route[i];
+    const to = route[i + 1];
+    
+    // Try both pair directions
+    const pairNormal = `${to}_${from}`;
+    const pairReverse = `${from}_${to}`;
+    
+    const tickerNormal = await getTicker(pairNormal);
+    const tickerReverse = await getTicker(pairReverse);
+    
+    if (tickerNormal) {
+      pairs.push({ pair: pairNormal, side: 'buy' });
+    } else if (tickerReverse) {
+      pairs.push({ pair: pairReverse, side: 'sell' });
+    } else {
+      return {
+        success: false,
+        error: `No pair found for ${from} → ${to}`,
+        timestamp: Date.now(),
+      };
+    }
+  }
+
+  // Calculate expected final amount
+  let expectedAmount = startAmount;
+  const fees = 0.002; // 0.2% per trade
+  
+  for (const { pair, side } of pairs) {
+    const ticker = await getTicker(pair);
+    if (!ticker) {
+      return {
+        success: false,
+        error: `Failed to get ticker for ${pair}`,
+        timestamp: Date.now(),
+      };
+    }
+    
+    if (side === 'buy') {
+      expectedAmount = (expectedAmount / ticker.ask) * (1 - fees);
+    } else {
+      expectedAmount = expectedAmount * ticker.bid * (1 - fees);
+    }
+  }
+
+  const expectedProfit = ((expectedAmount - startAmount) / startAmount) * 100;
+  
+  if (expectedProfit <= 0) {
+    return {
+      success: false,
+      error: `Arbitrage no longer profitable: ${expectedProfit.toFixed(4)}%`,
+      timestamp: Date.now(),
+    };
+  }
+
+  console.log(`[Trade Executor] Arbitrage expected profit: ${expectedProfit.toFixed(4)}%`);
+  
+  // For safety, don't execute actual arbitrage automatically
+  // This requires atomic execution or careful leg management
+  return {
+    success: false,
+    error: 'Arbitrage auto-execution disabled for safety - manual execution recommended',
     timestamp: Date.now(),
   };
 }
 
-async function getTicker(pair: string): Promise<{ bid: number; ask: number; last: number } | null> {
-  const response = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${pair}`);
-  const data = await response.json();
-  
-  if (!data || data.length === 0) return null;
-  
-  return {
-    bid: parseFloat(data[0].highest_bid),
-    ask: parseFloat(data[0].lowest_ask),
-    last: parseFloat(data[0].last),
-  };
-}
+// ============ MAIN HANDLER ============
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -145,7 +342,11 @@ serve(async (req) => {
       maxTradeSize,
       minEdge,
       expectedEdge,
+      entryPrice,
+      targetPrice,
+      stopLoss,
       route,
+      slippageTolerance = 0.5,
     } = request;
 
     // ============ HARD GUARDRAILS ============
@@ -157,85 +358,82 @@ serve(async (req) => {
 
     // 2. Check minimum edge threshold
     if (expectedEdge < minEdge) {
-      throw new Error(`Edge ${expectedEdge}% below minimum threshold ${minEdge}%`);
+      throw new Error(`Edge ${expectedEdge.toFixed(3)}% below minimum threshold ${minEdge}%`);
     }
 
     // 3. Validate trade size
     const tradeAmount = parseFloat(amount);
     if (tradeAmount > maxTradeSize) {
-      throw new Error(`Trade size $${tradeAmount} exceeds max allowed $${maxTradeSize}`);
+      throw new Error(`Trade size $${tradeAmount.toFixed(2)} exceeds max allowed $${maxTradeSize}`);
     }
 
-    // 4. Sanity check on edge (prevent executing obviously wrong opportunities)
+    // 4. Sanity check - prevent obviously bad trades
     if (expectedEdge > 5) {
-      throw new Error(`Edge ${expectedEdge}% suspiciously high - possible stale data`);
+      throw new Error(`Edge ${expectedEdge.toFixed(3)}% suspiciously high - possible stale data`);
+    }
+
+    // 5. Validate risk/reward
+    const riskPercent = ((entryPrice - stopLoss) / entryPrice) * 100;
+    const rewardPercent = ((targetPrice - entryPrice) / entryPrice) * 100;
+    const riskRewardRatio = rewardPercent / riskPercent;
+    
+    if (riskRewardRatio < 1.5 && opportunityType !== 'spread' && opportunityType !== 'arbitrage') {
+      throw new Error(`Risk/Reward ratio ${riskRewardRatio.toFixed(2)} below minimum 1.5`);
     }
 
     console.log(`[Trade Executor] Executing ${opportunityType} opportunity: ${symbol}`);
+    console.log(`[Trade Executor] Entry: $${entryPrice} | Target: $${targetPrice} | Stop: $${stopLoss}`);
+    console.log(`[Trade Executor] R/R Ratio: ${riskRewardRatio.toFixed(2)}`);
 
     // ============ EXECUTE BASED ON TYPE ============
 
-    if (opportunityType === 'spread') {
-      // Spread/Market Making execution
-      const pair = symbol.replace('/', '_');
-      const ticker = await getTicker(pair);
-      
-      if (!ticker) {
-        throw new Error(`Could not fetch ticker for ${pair}`);
-      }
-
-      // Verify spread still exists
-      const currentSpread = ((ticker.ask - ticker.bid) / ticker.last) * 100;
-      if (currentSpread < minEdge + 0.2) { // 0.2% buffer for fees
-        throw new Error(`Spread collapsed: ${currentSpread.toFixed(3)}% < required ${(minEdge + 0.2).toFixed(3)}%`);
-      }
-
-      // Execute: Place limit order at mid-price
-      const midPrice = ((ticker.bid + ticker.ask) / 2).toFixed(8);
-      const result = await placeOrder(credentials, pair, side, amount, midPrice);
-
+    if (opportunityType === 'arbitrage' && route && route.length >= 4) {
+      const result = await executeArbitrage(credentials, route, tradeAmount, slippageTolerance);
       return new Response(JSON.stringify({
-        type: 'spread',
-        success: result.success,
-        orderId: result.orderId,
-        executedAmount: result.executedAmount,
-        executedPrice: result.executedPrice,
-        error: result.error,
-        timestamp: result.timestamp,
-      }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-
-    } else if (opportunityType === 'arbitrage' && route && route.length >= 4) {
-      // Triangular arbitrage execution
-      // This is more complex - execute all legs quickly
-      
-      const results: TradeResult[] = [];
-      let currentAmount = tradeAmount;
-
-      // Verify arbitrage still profitable before execution
-      // (In production, you'd re-verify prices for all legs)
-      
-      // For safety in demo, we just log and don't actually execute arbitrage
-      // Real implementation would need atomic execution or careful leg management
-      console.log(`[Trade Executor] Arbitrage route: ${route.join(' → ')}`);
-      console.log(`[Trade Executor] WARNING: Arbitrage execution requires careful implementation`);
-      
-      return new Response(JSON.stringify({
-        success: false,
         type: 'arbitrage',
-        error: 'Arbitrage auto-execution disabled for safety - use manual execution',
-        route,
-        timestamp: Date.now(),
+        ...result,
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
-
-    } else {
-      throw new Error(`Unknown opportunity type: ${opportunityType}`);
     }
+
+    // All other types use smart order placement
+    const pair = symbol.replace('/', '_');
+    
+    // Verify opportunity still valid
+    const ticker = await getTicker(pair);
+    if (!ticker) {
+      throw new Error(`Could not fetch ticker for ${pair}`);
+    }
+
+    // Check if price moved too much
+    const priceDrift = Math.abs((ticker.last - entryPrice) / entryPrice) * 100;
+    if (priceDrift > slippageTolerance * 2) {
+      throw new Error(`Price drifted ${priceDrift.toFixed(3)}% from expected entry - opportunity stale`);
+    }
+
+    // Execute with smart order placement
+    const result = await placeSmartOrder(
+      credentials,
+      pair,
+      side,
+      amount,
+      entryPrice,
+      slippageTolerance
+    );
+
+    return new Response(JSON.stringify({
+      type: opportunityType,
+      symbol,
+      ...result,
+      riskRewardRatio,
+      targetPrice,
+      stopLoss,
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
 
   } catch (error) {
     console.error('[Trade Executor] Error:', error);
@@ -246,7 +444,7 @@ serve(async (req) => {
       error: errorMessage,
       timestamp: Date.now(),
     }), {
-      status: 200, // Return 200 so client can handle gracefully
+      status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
