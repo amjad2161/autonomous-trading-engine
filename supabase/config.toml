@@ -23,3 +23,9 @@ verify_jwt = false
 
 [functions.continuous-trader]
 verify_jwt = false
+
+[functions.autonomous-orchestrator]
+verify_jwt = false
+
+[functions.scheduler]
+verify_jwt = false
