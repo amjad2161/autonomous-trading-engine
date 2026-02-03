@@ -13,13 +13,16 @@ import {
   Play, 
   TrendingUp, 
   TrendingDown, 
-  Target,
-  Activity,
   BarChart3,
-  Clock
+  Clock,
+  Zap,
+  Settings2,
+  Trophy
 } from "lucide-react";
 import { useBacktest, BacktestConfig, BacktestResult } from "@/hooks/useBacktest";
-import { formatBacktestDate, getStrategyName } from "@/lib/backtest";
+import { useOptimization, OptimizeConfig, OptimizationResult } from "@/hooks/useOptimization";
+import { formatBacktestDate } from "@/lib/backtest";
+import { getMetricLabel } from "@/lib/optimize";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 
@@ -35,9 +38,17 @@ const STRATEGIES = [
   { value: 'mean_reversion', label: 'חזרה לממוצע (RSI)', description: 'קנייה באזורי קיצון' },
 ];
 
+const METRICS = [
+  { value: 'return', label: 'תשואה' },
+  { value: 'sharpe', label: 'Sharpe Ratio' },
+  { value: 'profit_factor', label: 'Profit Factor' },
+  { value: 'win_rate', label: 'Win Rate' },
+];
+
 export function BacktestPanel() {
   const { toast } = useToast();
   const backtest = useBacktest();
+  const optimization = useOptimization();
   
   const [config, setConfig] = useState<BacktestConfig>({
     symbol: 'BTC_USDT',
@@ -50,7 +61,9 @@ export function BacktestPanel() {
     takeProfit: 4,
   });
   
+  const [optimizeMetric, setOptimizeMetric] = useState<'return' | 'sharpe' | 'profit_factor' | 'win_rate'>('sharpe');
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const [optResult, setOptResult] = useState<OptimizationResult | null>(null);
   const [activeTab, setActiveTab] = useState('config');
 
   const handleRunBacktest = async () => {
@@ -71,8 +84,55 @@ export function BacktestPanel() {
     }
   };
 
+  const handleRunOptimization = async () => {
+    try {
+      const optConfig: OptimizeConfig = {
+        symbol: config.symbol,
+        strategy: config.strategy,
+        startDate: config.startDate,
+        endDate: config.endDate,
+        initialCapital: config.initialCapital,
+        positionSizeRange: [5, 20, 5],
+        stopLossRange: [1, 5, 1],
+        takeProfitRange: [2, 10, 2],
+        periodRange: [10, 30, 5],
+        thresholdRange: [0.3, 1.5, 0.3],
+        metric: optimizeMetric,
+        maxIterations: 300,
+      };
+      
+      const data = await optimization.mutateAsync(optConfig);
+      setOptResult(data);
+      setActiveTab('optimize');
+      
+      // Apply best params to config
+      setConfig(c => ({
+        ...c,
+        positionSize: data.bestParams.positionSize,
+        stopLoss: data.bestParams.stopLoss,
+        takeProfit: data.bestParams.takeProfit,
+      }));
+      
+      toast({
+        title: "אופטימיזציה הושלמה!",
+        description: `נבדקו ${data.totalIterations} שילובים, ${getMetricLabel(data.metric)}: ${data.bestScore.toFixed(2)}`,
+      });
+    } catch (error) {
+      toast({
+        title: "שגיאה באופטימיזציה",
+        description: error instanceof Error ? error.message : "שגיאה לא ידועה",
+        variant: "destructive"
+      });
+    }
+  };
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+  };
+
+  const formatScore = (score: number, metric: string) => {
+    if (metric === 'return' || metric === 'win_rate') return `${score.toFixed(2)}%`;
+    return score.toFixed(2);
   };
 
   return (
@@ -81,16 +141,24 @@ export function BacktestPanel() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FlaskConical className="h-4 w-4 text-primary" />
-            <CardTitle className="text-sm font-medium">Backtesting</CardTitle>
+            <CardTitle className="text-sm font-medium">Backtesting & Optimization</CardTitle>
           </div>
-          {result && (
-            <Badge 
-              variant={result.totalReturnPercent >= 0 ? "default" : "destructive"}
-              className="text-xs"
-            >
-              {result.totalReturnPercent >= 0 ? '+' : ''}{result.totalReturnPercent.toFixed(2)}%
-            </Badge>
-          )}
+          <div className="flex gap-2">
+            {optResult && (
+              <Badge variant="outline" className="text-xs border-accent text-accent-foreground">
+                <Zap className="h-3 w-3 mr-1" />
+                Optimized
+              </Badge>
+            )}
+            {result && (
+              <Badge 
+                variant={result.totalReturnPercent >= 0 ? "default" : "destructive"}
+                className="text-xs"
+              >
+                {result.totalReturnPercent >= 0 ? '+' : ''}{result.totalReturnPercent.toFixed(2)}%
+              </Badge>
+            )}
+          </div>
         </div>
       </CardHeader>
       
@@ -100,6 +168,10 @@ export function BacktestPanel() {
             <TabsTrigger value="config" className="text-xs">הגדרות</TabsTrigger>
             <TabsTrigger value="results" className="text-xs" disabled={!result}>תוצאות</TabsTrigger>
             <TabsTrigger value="trades" className="text-xs" disabled={!result}>עסקאות</TabsTrigger>
+            <TabsTrigger value="optimize" className="text-xs" disabled={!optResult}>
+              <Zap className="h-3 w-3 mr-1" />
+              אופטימיזציה
+            </TabsTrigger>
           </TabsList>
           
           <TabsContent value="config" className="flex-1 p-4 overflow-auto m-0">
@@ -189,7 +261,7 @@ export function BacktestPanel() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <Label className="text-xs text-red-400">Stop Loss</Label>
+                    <Label className="text-xs text-destructive">Stop Loss</Label>
                     <span className="text-xs text-muted-foreground">{config.stopLoss}%</span>
                   </div>
                   <Slider
@@ -203,7 +275,7 @@ export function BacktestPanel() {
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <Label className="text-xs text-green-400">Take Profit</Label>
+                    <Label className="text-xs text-primary">Take Profit</Label>
                     <span className="text-xs text-muted-foreground">{config.takeProfit}%</span>
                   </div>
                   <Slider
@@ -217,10 +289,10 @@ export function BacktestPanel() {
                 </div>
               </div>
               
-              {/* Run Button */}
+              {/* Run Backtest Button */}
               <Button 
                 onClick={handleRunBacktest}
-                disabled={backtest.isPending}
+                disabled={backtest.isPending || optimization.isPending}
                 className="w-full"
               >
                 {backtest.isPending ? (
@@ -235,6 +307,53 @@ export function BacktestPanel() {
                   </>
                 )}
               </Button>
+              
+              {/* Optimization Section */}
+              <div className="border-t border-border/30 pt-4 mt-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Settings2 className="h-4 w-4 text-accent-foreground" />
+                  <Label className="text-xs font-medium">אופטימיזציה אוטומטית</Label>
+                </div>
+                
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">מדד לאופטימיזציה</Label>
+                    <Select value={optimizeMetric} onValueChange={(v: typeof optimizeMetric) => setOptimizeMetric(v)}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {METRICS.map(m => (
+                          <SelectItem key={m.value} value={m.value} className="text-xs">{m.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <Button 
+                    onClick={handleRunOptimization}
+                    disabled={backtest.isPending || optimization.isPending}
+                    variant="secondary"
+                    className="w-full"
+                  >
+                    {optimization.isPending ? (
+                      <>
+                        <Clock className="h-4 w-4 mr-2 animate-spin" />
+                        מחפש פרמטרים אופטימליים...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="h-4 w-4 mr-2" />
+                        הרץ אופטימיזציה
+                      </>
+                    )}
+                  </Button>
+                  
+                  <p className="text-[10px] text-muted-foreground text-center">
+                    סורק מאות שילובי פרמטרים כדי למצוא את התצורה האופטימלית
+                  </p>
+                </div>
+              </div>
             </div>
           </TabsContent>
           
@@ -403,6 +522,103 @@ export function BacktestPanel() {
                   ))}
                 </TableBody>
               </Table>
+            )}
+          </TabsContent>
+          
+          <TabsContent value="optimize" className="flex-1 p-4 overflow-auto m-0">
+            {optResult && (
+              <div className="space-y-4">
+                {/* Best Parameters */}
+                <div className="bg-accent/20 rounded-lg p-4 border border-accent/30">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Trophy className="h-5 w-5 text-accent-foreground" />
+                    <span className="font-medium text-sm">פרמטרים אופטימליים</span>
+                  </div>
+                  
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <div className="bg-background/50 rounded-lg p-2 text-center">
+                      <div className="text-muted-foreground mb-1">Position Size</div>
+                      <div className="font-bold text-lg">{optResult.bestParams.positionSize}%</div>
+                    </div>
+                    <div className="bg-background/50 rounded-lg p-2 text-center">
+                      <div className="text-muted-foreground mb-1">Stop Loss</div>
+                      <div className="font-bold text-lg text-destructive">{optResult.bestParams.stopLoss}%</div>
+                    </div>
+                    <div className="bg-background/50 rounded-lg p-2 text-center">
+                      <div className="text-muted-foreground mb-1">Take Profit</div>
+                      <div className="font-bold text-lg text-primary">{optResult.bestParams.takeProfit}%</div>
+                    </div>
+                  </div>
+                  
+                  {optResult.bestParams.period && (
+                    <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
+                      <div className="bg-background/50 rounded-lg p-2 text-center">
+                        <div className="text-muted-foreground mb-1">Period</div>
+                        <div className="font-bold">{optResult.bestParams.period}</div>
+                      </div>
+                      <div className="bg-background/50 rounded-lg p-2 text-center">
+                        <div className="text-muted-foreground mb-1">Threshold</div>
+                        <div className="font-bold">{optResult.bestParams.threshold?.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="mt-3 p-2 bg-primary/10 rounded-lg text-center">
+                    <div className="text-xs text-muted-foreground">{getMetricLabel(optResult.metric)}</div>
+                    <div className="text-xl font-bold text-primary">
+                      {formatScore(optResult.bestScore, optResult.metric)}
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Stats */}
+                <div className="text-xs text-muted-foreground text-center">
+                  נבדקו {optResult.totalIterations} שילובים על {optResult.candlesUsed} נרות
+                </div>
+                
+                {/* Top Results Table */}
+                <div className="bg-background/50 rounded-lg">
+                  <div className="text-xs font-medium p-3 border-b border-border/30">
+                    Top 10 תוצאות
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="text-[10px]">
+                        <TableHead>#</TableHead>
+                        <TableHead>Position</TableHead>
+                        <TableHead>SL/TP</TableHead>
+                        <TableHead>תשואה</TableHead>
+                        <TableHead>Win Rate</TableHead>
+                        <TableHead>Sharpe</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {optResult.results.slice(0, 10).map((r, i) => (
+                        <TableRow key={i} className={`text-[10px] ${i === 0 ? 'bg-accent/10' : ''}`}>
+                          <TableCell className="font-bold">{i + 1}</TableCell>
+                          <TableCell>{r.params.positionSize}%</TableCell>
+                          <TableCell>{r.params.stopLoss}/{r.params.takeProfit}%</TableCell>
+                          <TableCell className={r.totalReturn >= 0 ? 'text-primary' : 'text-destructive'}>
+                            {r.totalReturn >= 0 ? '+' : ''}{r.totalReturn.toFixed(1)}%
+                          </TableCell>
+                          <TableCell>{r.winRate.toFixed(0)}%</TableCell>
+                          <TableCell>{r.sharpeRatio.toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                
+                {/* Apply Button */}
+                <Button 
+                  onClick={handleRunBacktest}
+                  disabled={backtest.isPending}
+                  className="w-full"
+                >
+                  <Play className="h-4 w-4 mr-2" />
+                  הרץ Backtest עם הפרמטרים האופטימליים
+                </Button>
+              </div>
             )}
           </TabsContent>
         </Tabs>
