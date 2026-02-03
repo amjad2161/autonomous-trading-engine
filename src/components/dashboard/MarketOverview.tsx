@@ -36,10 +36,10 @@ export function MarketOverview() {
               const pair = ticker.currency_pair.replace('_', '/');
               
               return (
-                <div key={ticker.currency_pair} className="p-3 hover:bg-muted/20 transition-colors">
+                <div key={ticker.currency_pair} className="p-2 sm:p-3 hover:bg-muted/20 transition-colors">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
+                      <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-muted flex items-center justify-center">
                         <span className="text-xs font-bold">
                           {ticker.currency_pair.split('_')[0].slice(0, 2)}
                         </span>
