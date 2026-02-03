@@ -67,7 +67,6 @@ export function HyperEnginePanel() {
           event: '*',
           schema: 'public',
           table: 'trading_system_state',
-          filter: 'id=eq.hyper-engine',
         },
         (payload) => {
           if (payload.new) {
@@ -129,7 +128,7 @@ export function HyperEnginePanel() {
       const { data } = await supabase
         .from('trading_system_state')
         .select('*')
-        .eq('id', 'hyper-engine')
+         .limit(1)
         .maybeSingle();
       
       if (data) {
