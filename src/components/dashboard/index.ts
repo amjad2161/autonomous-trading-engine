@@ -10,3 +10,4 @@ export { ContinuousTradingPanel } from "./ContinuousTradingPanel";
 export { AutonomousControlPanel } from "./AutonomousControlPanel";
 export { TradingChatPanel } from "./TradingChatPanel";
 export { PerformanceDashboard } from "./PerformanceDashboard";
+export { CronJobSetup } from "./CronJobSetup";
