@@ -1,9 +1,18 @@
-import { Bell, RefreshCw, Wifi, WifiOff, Clock } from "lucide-react";
+import { Bell, RefreshCw, Wifi, WifiOff, Clock, Settings, LogOut } from "lucide-react";
 import { useSpotBalances } from "@/hooks/useGateApi";
 import { formatUSDT } from "@/lib/gate-api";
+import { useCredentials } from "@/hooks/useCredentials";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 
 export function TopBar() {
   const { data: balances, isLoading, isError, dataUpdatedAt } = useSpotBalances();
+  const { clearCredentials, credentials } = useCredentials();
   
   const usdtBalance = balances?.find(b => b.currency === 'USDT');
   const totalUSDT = usdtBalance 
@@ -18,6 +27,16 @@ export function TopBar() {
         hour12: false 
       })
     : '--:--:--';
+
+  const handleDisconnect = () => {
+    clearCredentials();
+    window.location.reload();
+  };
+
+  // Mask API key for display
+  const maskedKey = credentials?.apiKey 
+    ? `${credentials.apiKey.slice(0, 4)}...${credentials.apiKey.slice(-4)}`
+    : 'Not connected';
 
   return (
     <header className="h-14 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-4">
@@ -82,6 +101,25 @@ export function TopBar() {
           <Bell className="w-5 h-5" />
           <span className="absolute top-1 right-1 w-2 h-2 bg-profit rounded-full" />
         </button>
+        
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
+              <Settings className="w-5 h-5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <div className="px-2 py-1.5">
+              <p className="text-xs text-muted-foreground">API Key</p>
+              <p className="text-sm font-mono">{maskedKey}</p>
+            </div>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleDisconnect} className="text-destructive focus:text-destructive">
+              <LogOut className="w-4 h-4 mr-2" />
+              Disconnect
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
