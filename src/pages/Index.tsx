@@ -9,7 +9,8 @@ import {
   BacktestPanel,
   ContinuousTradingPanel,
   AutonomousControlPanel,
-  TradingChatPanel
+  TradingChatPanel,
+  PerformanceDashboard
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -38,6 +39,7 @@ const Index = () => {
         <div className="flex items-center justify-between mb-4">
           <TabsList>
             <TabsTrigger value="dashboard">דשבורד</TabsTrigger>
+            <TabsTrigger value="performance">ביצועים</TabsTrigger>
             <TabsTrigger value="backtest">Backtesting</TabsTrigger>
           </TabsList>
           
@@ -87,6 +89,12 @@ const Index = () => {
             <div className="xl:col-span-3 h-64 sm:h-80">
               <ActivityLog />
             </div>
+          </div>
+        </TabsContent>
+        
+        <TabsContent value="performance" className="mt-0">
+          <div className="h-[calc(100vh-12rem)]">
+            <PerformanceDashboard />
           </div>
         </TabsContent>
         

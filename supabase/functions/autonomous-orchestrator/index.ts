@@ -67,6 +67,23 @@ const CONFIG = {
   
   // Module 14: Auto-Pruning
   PRUNE_BOTTOM_PERCENT: 0.25, // Prune more aggressively
+  
+  // 🆕 Module 15: Dynamic Position Sizing
+  VOLATILITY_SIZE_SCALING: true,
+  LOW_VOL_MULTIPLIER: 1.3,   // Size up in low vol
+  HIGH_VOL_MULTIPLIER: 0.6,  // Size down in high vol
+  VOL_LOW_THRESHOLD: 1.5,    // % daily volatility
+  VOL_HIGH_THRESHOLD: 4.0,
+  
+  // 🆕 Module 16: Correlation Management
+  MAX_CORRELATED_POSITIONS: 2,
+  CORRELATION_PAIRS: [
+    ['BTC_USDT', 'ETH_USDT'],
+    ['SOL_USDT', 'AVAX_USDT'],
+    ['DOGE_USDT', 'SHIB_USDT'],
+    ['PEPE_USDT', 'FLOKI_USDT'],
+    ['ARB_USDT', 'OP_USDT'],
+  ] as [string, string][],
 };
 
 // ===================== TYPES =====================
@@ -174,24 +191,115 @@ async function generateSignature(method: string, url: string, queryString: strin
   return createHmac('sha512', secret).update(signatureString).digest('hex');
 }
 
-async function gateRequest(endpoint: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', params: Record<string, string> = {}, body?: Record<string, unknown>): Promise<any> {
-  const GATE_API_KEY = Deno.env.get('GATE_API_KEY')!;
-  const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET')!;
-  const baseUrl = 'https://api.gateio.ws';
-  const apiPrefix = '/api/v4';
-  const url = `${apiPrefix}${endpoint}`;
-  const queryString = new URLSearchParams(params).toString();
-  const fullUrl = queryString ? `${baseUrl}${url}?${queryString}` : `${baseUrl}${url}`;
-  const payloadString = body ? JSON.stringify(body) : '';
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = await generateSignature(method, url, queryString, payloadString, timestamp, GATE_API_SECRET);
+// ===================== ERROR RECOVERY SYSTEM =====================
+const ERROR_RECOVERY = {
+  MAX_RETRIES: 3,
+  BASE_DELAY_MS: 1000,
+  MAX_DELAY_MS: 30000,
+  CIRCUIT_BREAKER_THRESHOLD: 5,
+  CIRCUIT_BREAKER_RESET_MS: 5 * 60 * 1000,
+};
 
-  const response = await fetch(fullUrl, {
-    method,
-    headers: { 'KEY': GATE_API_KEY, 'SIGN': signature, 'Timestamp': timestamp, 'Content-Type': 'application/json' },
-    body: payloadString || undefined,
-  });
-  return response.json();
+let circuitBreaker = {
+  failures: 0,
+  lastFailure: 0,
+  isOpen: false,
+};
+
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  operationName: string,
+  maxRetries: number = ERROR_RECOVERY.MAX_RETRIES
+): Promise<T> {
+  // Check circuit breaker
+  if (circuitBreaker.isOpen) {
+    if (Date.now() - circuitBreaker.lastFailure > ERROR_RECOVERY.CIRCUIT_BREAKER_RESET_MS) {
+      circuitBreaker.isOpen = false;
+      circuitBreaker.failures = 0;
+      await log('info', 'ERROR_RECOVERY', '🔄 Circuit breaker reset');
+    } else {
+      throw new Error(`Circuit breaker open for ${operationName}`);
+    }
+  }
+
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await operation();
+      // Success - reset circuit breaker
+      if (circuitBreaker.failures > 0) {
+        circuitBreaker.failures = Math.max(0, circuitBreaker.failures - 1);
+      }
+      return result;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      
+      // Don't retry on certain errors
+      const errorMsg = lastError.message.toLowerCase();
+      if (errorMsg.includes('insufficient') || 
+          errorMsg.includes('invalid') ||
+          errorMsg.includes('not found')) {
+        throw lastError;
+      }
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff
+        const delay = Math.min(
+          ERROR_RECOVERY.BASE_DELAY_MS * Math.pow(2, attempt - 1),
+          ERROR_RECOVERY.MAX_DELAY_MS
+        );
+        await log('warn', 'ERROR_RECOVERY', `Retry ${attempt}/${maxRetries} for ${operationName} in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+  
+  // All retries failed - update circuit breaker
+  circuitBreaker.failures++;
+  circuitBreaker.lastFailure = Date.now();
+  
+  if (circuitBreaker.failures >= ERROR_RECOVERY.CIRCUIT_BREAKER_THRESHOLD) {
+    circuitBreaker.isOpen = true;
+    await log('error', 'ERROR_RECOVERY', `🔴 Circuit breaker OPENED after ${circuitBreaker.failures} failures`);
+  }
+  
+  throw lastError!;
+}
+
+async function gateRequest(endpoint: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', params: Record<string, string> = {}, body?: Record<string, unknown>): Promise<any> {
+  return withRetry(async () => {
+    const GATE_API_KEY = Deno.env.get('GATE_API_KEY')!;
+    const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET')!;
+    const baseUrl = 'https://api.gateio.ws';
+    const apiPrefix = '/api/v4';
+    const url = `${apiPrefix}${endpoint}`;
+    const queryString = new URLSearchParams(params).toString();
+    const fullUrl = queryString ? `${baseUrl}${url}?${queryString}` : `${baseUrl}${url}`;
+    const payloadString = body ? JSON.stringify(body) : '';
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = await generateSignature(method, url, queryString, payloadString, timestamp, GATE_API_SECRET);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    try {
+      const response = await fetch(fullUrl, {
+        method,
+        headers: { 'KEY': GATE_API_KEY, 'SIGN': signature, 'Timestamp': timestamp, 'Content-Type': 'application/json' },
+        body: payloadString || undefined,
+        signal: controller.signal,
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+      }
+      
+      return response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }, `gateRequest:${endpoint}`);
 }
 
 // ===================== LOGGING =====================
@@ -313,6 +421,46 @@ function buildWhitelist(tickers: any[], highVol: boolean, disabledPairs: Set<str
     .sort((a, b) => parseFloat(b.quote_volume) - parseFloat(a.quote_volume))
     .slice(0, 100)
     .map(t => t.currency_pair);
+}
+
+// ===================== MODULE 15: DYNAMIC POSITION SIZING =====================
+function calculateVolatilityAdjustedSize(baseSize: number, volatility: number): number {
+  if (!CONFIG.VOLATILITY_SIZE_SCALING) return baseSize;
+  
+  if (volatility < CONFIG.VOL_LOW_THRESHOLD) {
+    // Low volatility - can size up
+    return baseSize * CONFIG.LOW_VOL_MULTIPLIER;
+  } else if (volatility > CONFIG.VOL_HIGH_THRESHOLD) {
+    // High volatility - size down
+    return baseSize * CONFIG.HIGH_VOL_MULTIPLIER;
+  }
+  
+  // Linear interpolation between thresholds
+  const range = CONFIG.VOL_HIGH_THRESHOLD - CONFIG.VOL_LOW_THRESHOLD;
+  const position = (volatility - CONFIG.VOL_LOW_THRESHOLD) / range;
+  const multiplier = CONFIG.LOW_VOL_MULTIPLIER - (CONFIG.LOW_VOL_MULTIPLIER - CONFIG.HIGH_VOL_MULTIPLIER) * position;
+  
+  return baseSize * multiplier;
+}
+
+// ===================== MODULE 16: CORRELATION MANAGER =====================
+function isCorrelatedWith(pair1: string, pair2: string): boolean {
+  for (const [a, b] of CONFIG.CORRELATION_PAIRS) {
+    if ((pair1 === a && pair2 === b) || (pair1 === b && pair2 === a)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function countCorrelatedPositions(targetPair: string, positions: Position[]): number {
+  let count = 0;
+  for (const pos of positions) {
+    if (isCorrelatedWith(targetPair, pos.symbol)) {
+      count++;
+    }
+  }
+  return count;
 }
 
 // ===================== MODULE 4: TURBO SCANNER =====================
@@ -946,9 +1094,24 @@ async function runEliteCycle(): Promise<{
   const maxEntries = state.systemState === 'DEFENSE' ? 1 : (state.systemState === 'TURBO' ? 3 : 2);
   
   for (const signal of signals.slice(0, maxEntries)) {
+    // 🆕 Check correlation with existing positions
+    const correlatedCount = countCorrelatedPositions(signal.pair, state.positions);
+    if (correlatedCount >= CONFIG.MAX_CORRELATED_POSITIONS) {
+      await log('info', 'ENGINE', `⏭️ Skipping ${signal.currency} - ${correlatedCount} correlated positions`);
+      continue;
+    }
+    
+    // Calculate base risk
     const risk = calculateDynamicRisk(state);
     const riskAmount = state.currentBalance * risk;
-    const size = Math.min(riskAmount / signal.risk, state.currentBalance * CONFIG.MAX_PER_ASSET);
+    let size = Math.min(riskAmount / signal.risk, state.currentBalance * CONFIG.MAX_PER_ASSET);
+    
+    // 🆕 Apply volatility-adjusted sizing
+    const market = marketMap.get(signal.pair);
+    if (market) {
+      size = calculateVolatilityAdjustedSize(size, market.volatility);
+    }
+    
     if (size < 5) continue;
     
     const amount = size / signal.price;
