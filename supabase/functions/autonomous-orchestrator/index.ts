@@ -388,11 +388,16 @@ function validateSignals(markets: MarketData[], state: EngineState): Signal[] {
   const maxPos = state.systemState === 'DEFENSE' ? Math.floor(CONFIG.MAX_POSITIONS / 2) : CONFIG.MAX_POSITIONS;
   const eligibleMarkets = state.systemState === 'DEFENSE' ? markets.slice(0, CONFIG.DEFENSE_TOP_PAIRS) : markets;
   
+  // 🔥 NON-STOP MODE: If no positions, be MORE aggressive to find opportunities
+  const noPositions = state.positions.length === 0;
+  const urgencyBonus = noPositions ? 0.3 : 0; // Lower R:R requirement when idle
+  
   for (const market of eligibleMarkets) {
     if (state.positions.some(p => p.currency === market.currency)) continue;
     if (state.positions.length >= maxPos) break;
     if (market.regime === 'PANIC_LIQUIDITY_EVENT') continue;
-    if (market.regime === 'DISTRIBUTION_EXHAUSTION' && market.score < 70) continue;
+    // Relaxed: Only skip distribution if score is really low
+    if (market.regime === 'DISTRIBUTION_EXHAUSTION' && market.score < 50) continue;
     
     // Dynamic stop based on volatility
     const stopPercent = Math.min(
@@ -405,28 +410,49 @@ function validateSignals(markets: MarketData[], state: EngineState): Signal[] {
     let expectedReturn = 0;
     let confidence = 0;
     
+    // 🔥 EXPANDED SIGNAL DETECTION - More entry types
     switch (market.regime) {
       case 'TREND_CONTINUATION':
-        if (market.change24h > 3 && market.change24h < 15 && market.vwapRelation > 0) {
-          reason = 'trend_continuation';
-          expectedReturn = 0.06;
-          confidence = 75 + market.trendAlignment * 15;
+        // Relaxed: accept smaller trends
+        if (market.change24h > 1.5 && market.change24h < 20) {
+          reason = 'trend_ride';
+          expectedReturn = 0.04;
+          confidence = 70 + market.trendAlignment * 20;
         }
         break;
+        
       case 'BREAKOUT_EXPANSION':
         const distFromHigh = (market.high24h - market.last) / market.high24h;
-        if (distFromHigh < 0.01 && market.volume > 800000) {
-          reason = 'breakout_expansion';
-          expectedReturn = 0.05;
-          confidence = 70 + (market.volume / 2000000) * 10;
+        // Relaxed volume requirement
+        if (distFromHigh < 0.02 && market.volume > 500000) {
+          reason = 'breakout_chase';
+          expectedReturn = 0.035;
+          confidence = 68 + (market.volume / 1500000) * 15;
         }
         break;
+        
       case 'RANGE_HARVEST':
         const distFromLow = (market.last - market.low24h) / market.low24h;
-        if (distFromLow < 0.03 && market.change24h > -5) {
-          reason = 'range_scalp';
+        // MORE AGGRESSIVE: Accept wider range
+        if (distFromLow < 0.05 && market.change24h > -8) {
+          reason = 'bounce_scalp';
+          expectedReturn = 0.025;
+          confidence = 62 + (market.spread < 0.20 ? 12 : 0);
+        }
+        // 🔥 NEW: Micro momentum scalp
+        else if (market.change24h > 0.5 && market.change24h < 5 && market.volume > 300000) {
+          reason = 'micro_momentum';
+          expectedReturn = 0.02;
+          confidence = 60 + market.volumeImpulse * 10;
+        }
+        break;
+        
+      case 'DISTRIBUTION_EXHAUSTION':
+        // 🔥 NEW: Short-term reversal play
+        if (market.change24h < -3 && market.change24h > -10 && market.volume > 400000) {
+          reason = 'dip_buy';
           expectedReturn = 0.03;
-          confidence = 65 + (market.spread < 0.15 ? 10 : 0);
+          confidence = 58;
         }
         break;
     }
@@ -436,13 +462,18 @@ function validateSignals(markets: MarketData[], state: EngineState): Signal[] {
     const fees = 0.004;
     const netReturn = expectedReturn - fees;
     const netRR = netReturn / stopPercent;
-    if (netRR < CONFIG.MIN_REWARD_RISK) continue;
+    
+    // 🔥 URGENCY: Lower R:R requirement when capital is idle
+    const requiredRR = CONFIG.MIN_REWARD_RISK - urgencyBonus;
+    if (netRR < requiredRR) continue;
     
     const slippageBudget = (fees + market.spread / 100) / expectedReturn;
-    if (slippageBudget > CONFIG.MAX_FEE_SLIPPAGE_RATIO) continue;
+    // Relaxed slippage tolerance
+    if (slippageBudget > CONFIG.MAX_FEE_SLIPPAGE_RATIO + (noPositions ? 0.05 : 0)) continue;
     
-    if (market.change24h > 20) continue;
-    if (market.vwapRelation < -0.05) continue;
+    // Relaxed extension filter
+    if (market.change24h > 25) continue;
+    if (market.vwapRelation < -0.08) continue;
     
     signals.push({
       pair: market.pair,
@@ -453,7 +484,7 @@ function validateSignals(markets: MarketData[], state: EngineState): Signal[] {
       risk: stopPercent,
       rewardRisk: netRR,
       stopLoss,
-      confidence: Math.min(confidence, 95),
+      confidence: Math.min(confidence + (noPositions ? 5 : 0), 95),
       regime: market.regime,
       slippageBudget,
       signal_id: generateSignalId(),
