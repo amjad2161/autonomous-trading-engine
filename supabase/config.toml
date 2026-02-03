@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.opportunity-scanner]
 verify_jwt = false
+
+[functions.execute-trade]
+verify_jwt = false
