@@ -15,12 +15,13 @@ import {
   TickScalpingPanel,
   MasterControlPanel,
   AdvancedAnalytics,
-  TradeHistoryTable
+  TradeHistoryTable,
+  HyperEnginePanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Server, Zap, Brain, BarChart3, Settings, FlaskConical } from "lucide-react";
+import { Server, Zap, Brain, BarChart3, Settings, FlaskConical, Rocket } from "lucide-react";
 
 const Index = () => {
   const { isLoading, isServerMode } = useCredentials();
@@ -39,9 +40,13 @@ const Index = () => {
 
   return (
     <DashboardLayout>
-      <Tabs defaultValue="control" className="w-full">
+      <Tabs defaultValue="hyper" className="w-full">
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <TabsList className="flex-wrap">
+            <TabsTrigger value="hyper" className="flex items-center gap-1">
+              <Rocket className="h-3 w-3" />
+              Hyper
+            </TabsTrigger>
             <TabsTrigger value="control" className="flex items-center gap-1">
               <Settings className="h-3 w-3" />
               בקרה
@@ -50,7 +55,6 @@ const Index = () => {
               <BarChart3 className="h-3 w-3" />
               אנליטיקס
             </TabsTrigger>
-            <TabsTrigger value="dashboard">דשבורד</TabsTrigger>
             <TabsTrigger value="scalping" className="flex items-center gap-1">
               <Zap className="h-3 w-3" />
               Scalping
@@ -69,6 +73,36 @@ const Index = () => {
             </Badge>
           )}
         </div>
+        
+        {/* Hyper Engine Tab - NEW DEFAULT */}
+        <TabsContent value="hyper" className="mt-0">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            {/* Hyper Engine Panel */}
+            <div className="lg:col-span-4">
+              <HyperEnginePanel />
+            </div>
+            
+            {/* Master Control Panel */}
+            <div className="lg:col-span-4">
+              <MasterControlPanel />
+            </div>
+            
+            {/* Treasury */}
+            <div className="lg:col-span-4">
+              <TreasuryPanel />
+            </div>
+            
+            {/* Positions */}
+            <div className="lg:col-span-6 h-[350px]">
+              <PositionsPanel />
+            </div>
+            
+            {/* Activity Log */}
+            <div className="lg:col-span-6 h-[350px]">
+              <ActivityLog />
+            </div>
+          </div>
+        </TabsContent>
         
         {/* Control Panel Tab */}
         <TabsContent value="control" className="mt-0">
@@ -103,46 +137,6 @@ const Index = () => {
         {/* Analytics Tab */}
         <TabsContent value="analytics" className="mt-0">
           <AdvancedAnalytics />
-        </TabsContent>
-        
-        {/* Dashboard Tab */}
-        <TabsContent value="dashboard" className="mt-0">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 sm:gap-4 pb-4">
-            {/* AI Chat Panel */}
-            <div className="xl:col-span-4 h-auto min-h-[500px]">
-              <TradingChatPanel />
-            </div>
-            
-            {/* Autonomous Control Panel */}
-            <div className="xl:col-span-4 h-auto min-h-[450px]">
-              <AutonomousControlPanel />
-            </div>
-            
-            {/* Treasury Panel */}
-            <div className="xl:col-span-4 h-auto min-h-[350px]">
-              <TreasuryPanel />
-            </div>
-            
-            {/* Market Overview */}
-            <div className="xl:col-span-3 h-64 sm:h-80 xl:h-auto">
-              <MarketOverview />
-            </div>
-            
-            {/* Positions Panel */}
-            <div className="xl:col-span-3 h-72 sm:h-96 xl:h-auto">
-              <PositionsPanel />
-            </div>
-            
-            {/* Opportunities */}
-            <div className="xl:col-span-3 h-64 sm:h-80">
-              <OpportunitiesPanel />
-            </div>
-            
-            {/* Activity Log */}
-            <div className="xl:col-span-3 h-64 sm:h-80">
-              <ActivityLog />
-            </div>
-          </div>
         </TabsContent>
         
         {/* Scalping Tab */}
