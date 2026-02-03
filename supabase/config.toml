@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.ai-optimizer]
 verify_jwt = false
+
+[functions.cron-trigger]
+verify_jwt = false
