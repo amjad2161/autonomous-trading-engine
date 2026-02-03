@@ -67,15 +67,28 @@ async function fetchHistoricalData(
 ): Promise<Candle[]> {
   const allCandles: Candle[] = [];
   let currentStart = startTime;
-  const batchSize = 1000;
+  const batchSize = 999; // Gate.io max is 1000, use 999 to be safe
+  const intervalSeconds = 3600; // 1 hour in seconds
+  
+  console.log(`Fetching data for ${symbol} from ${new Date(startTime * 1000).toISOString()} to ${new Date(endTime * 1000).toISOString()}`);
   
   while (currentStart < endTime) {
-    const url = `https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=${symbol}&interval=${interval}&from=${currentStart}&to=${Math.min(currentStart + batchSize * 3600, endTime)}&limit=${batchSize}`;
+    // Calculate end time for this batch: start + (batchSize * interval)
+    const toTime = Math.min(currentStart + (batchSize * intervalSeconds), endTime);
+    const url = `https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=${symbol}&interval=${interval}&from=${currentStart}&to=${toTime}&limit=${batchSize}`;
+    
+    console.log(`Fetching batch: from=${currentStart} (${new Date(currentStart * 1000).toISOString()}) to=${toTime} (${new Date(toTime * 1000).toISOString()})`);
     
     const response = await fetch(url);
-    if (!response.ok) break;
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log(`API error: ${response.status} ${response.statusText} - ${errorText}`);
+      break;
+    }
     
     const data = await response.json();
+    console.log(`Received ${Array.isArray(data) ? data.length : 0} candles`);
+    
     if (!Array.isArray(data) || data.length === 0) break;
     
     for (const candle of data) {
@@ -89,10 +102,12 @@ async function fetchHistoricalData(
       });
     }
     
-    currentStart = allCandles[allCandles.length - 1].timestamp + 3600;
-    await new Promise(r => setTimeout(r, 50));
+    // Move start to after the last candle we received
+    currentStart = allCandles[allCandles.length - 1].timestamp + intervalSeconds;
+    await new Promise(r => setTimeout(r, 100)); // Rate limiting
   }
   
+  console.log(`Total candles fetched: ${allCandles.length}`);
   return allCandles.sort((a, b) => a.timestamp - b.timestamp);
 }
 

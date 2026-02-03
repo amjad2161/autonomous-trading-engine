@@ -61,8 +61,9 @@ export function BacktestPanel() {
   const [config, setConfig] = useState<BacktestConfig>({
     symbol: 'BTC_USDT',
     strategy: 'momentum',
-    startDate: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 90 days for WFA
-    endDate: new Date().toISOString().split('T')[0],
+    // Use recent dates within Gate.io's 10000-candle limit (~416 days)
+    startDate: '2025-10-01',
+    endDate: '2026-01-15',
     initialCapital: 10000,
     positionSize: 10,
     stopLoss: 2,
