@@ -17,3 +17,9 @@ verify_jwt = false
 
 [functions.walk-forward]
 verify_jwt = false
+
+[functions.auto-liquidate]
+verify_jwt = false
+
+[functions.continuous-trader]
+verify_jwt = false
