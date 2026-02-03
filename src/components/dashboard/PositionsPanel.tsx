@@ -20,7 +20,9 @@ interface Position {
 const mockPositions: Position[] = [];
 
 export function PositionsPanel() {
-  const { data: openOrders, isLoading } = useOpenOrders();
+  // Note: Gate.io API requires currency_pair for orders endpoint
+  // For now, we don't fetch orders globally - would need to iterate all pairs
+  const openOrders: any[] = [];
 
   return (
     <div className="terminal-card h-full flex flex-col">
