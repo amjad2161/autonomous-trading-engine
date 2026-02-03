@@ -44,3 +44,6 @@ verify_jwt = false
 
 [functions.master-brain]
 verify_jwt = false
+
+[functions.ai-optimizer]
+verify_jwt = false
