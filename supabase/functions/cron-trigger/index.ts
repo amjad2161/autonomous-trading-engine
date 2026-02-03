@@ -46,6 +46,15 @@ serve(async (req) => {
       console.log(`[CRON] AI Optimizer: ${optimizerResponse.error ? 'ERROR' : 'Complete'}`);
     }
 
+    if (action === 'hyper') {
+      // Trigger Hyper Engine (ultra-fast trading)
+      const hyperResponse = await supabase.functions.invoke('hyper-engine', {
+        body: { durationSeconds: 120, paperMode: false },
+      });
+      results.hyper_engine = hyperResponse.error ? { error: hyperResponse.error.message } : hyperResponse.data;
+      console.log(`[CRON] Hyper Engine: ${hyperResponse.error ? 'ERROR' : 'Complete'}`);
+    }
+
     if (action === 'positions') {
       // Just manage positions
       const posResponse = await supabase.functions.invoke('position-manager', {

@@ -50,3 +50,6 @@ verify_jwt = false
 
 [functions.cron-trigger]
 verify_jwt = false
+
+[functions.hyper-engine]
+verify_jwt = false
