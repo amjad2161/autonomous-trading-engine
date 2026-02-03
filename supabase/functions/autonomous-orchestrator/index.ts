@@ -15,13 +15,13 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // ===================== CONFIGURATION =====================
 // 🎯 CAPITAL ACCUMULATION MODE - Start small, compound gains
 const CONFIG = {
-  // Module 1: Risk Governor - CONSERVATIVE for capital building
-  BASE_RISK: 0.006,       // 0.6% per trade (was 1.2%) - micro risk
-  MIN_RISK: 0.004,        // 0.4% minimum
-  MAX_RISK: 0.010,        // 1.0% max (was 1.6%)
-  MAX_POSITIONS: 3,       // Focus on fewer, quality trades
-  MAX_PER_ASSET: 0.08,    // 8% max per asset (was 12%)
-  MAX_EXPOSURE: 0.35,     // 35% total exposure (was 50%)
+  // Module 1: Risk Governor - ULTRA AGGRESSIVE for more trades
+  BASE_RISK: 0.025,       // 2.5% per trade (INCREASED)
+  MIN_RISK: 0.015,        // 1.5% minimum
+  MAX_RISK: 0.040,        // 4% max
+  MAX_POSITIONS: 5,       // More positions allowed
+  MAX_PER_ASSET: 0.15,    // 15% max per asset
+  MAX_EXPOSURE: 0.60,     // 60% total exposure
   DAILY_DD_DEFENSE: 0.02, // Enter defense at -2% (was -3%)
   DAILY_DD_HALT: 0.04,    // Halt at -4% (was -5%)
   LOSS_CLUSTER_WINDOW_MS: 60 * 60 * 1000, // 1 hour (was 90 min)
@@ -558,49 +558,52 @@ function validateSignals(markets: MarketData[], state: EngineState): Signal[] {
     let expectedReturn = 0;
     let confidence = 0;
     
-    // 🔥 EXPANDED SIGNAL DETECTION - More entry types
+    // 🔥 ULTRA AGGRESSIVE SIGNAL DETECTION
     switch (market.regime) {
       case 'TREND_CONTINUATION':
-        // Relaxed: accept smaller trends
-        if (market.change24h > 1.5 && market.change24h < 20) {
+        if (market.change24h > 0.5 && market.change24h < 30) {
           reason = 'trend_ride';
-          expectedReturn = 0.04;
-          confidence = 70 + market.trendAlignment * 20;
+          expectedReturn = 0.03;
+          confidence = 65 + market.trendAlignment * 20;
         }
         break;
         
       case 'BREAKOUT_EXPANSION':
         const distFromHigh = (market.high24h - market.last) / market.high24h;
-        // Relaxed volume requirement
-        if (distFromHigh < 0.02 && market.volume > 500000) {
+        if (distFromHigh < 0.05 && market.volume > 200000) {
           reason = 'breakout_chase';
-          expectedReturn = 0.035;
-          confidence = 68 + (market.volume / 1500000) * 15;
+          expectedReturn = 0.03;
+          confidence = 65 + (market.volume / 1500000) * 15;
         }
         break;
         
       case 'RANGE_HARVEST':
         const distFromLow = (market.last - market.low24h) / market.low24h;
-        // MORE AGGRESSIVE: Accept wider range
-        if (distFromLow < 0.05 && market.change24h > -8) {
+        // ULTRA AGGRESSIVE: Almost any range setup
+        if (distFromLow < 0.10 && market.change24h > -15) {
           reason = 'bounce_scalp';
-          expectedReturn = 0.025;
-          confidence = 62 + (market.spread < 0.20 ? 12 : 0);
-        }
-        // 🔥 NEW: Micro momentum scalp
-        else if (market.change24h > 0.5 && market.change24h < 5 && market.volume > 300000) {
-          reason = 'micro_momentum';
           expectedReturn = 0.02;
-          confidence = 60 + market.volumeImpulse * 10;
+          confidence = 60 + (market.spread < 0.30 ? 10 : 0);
+        }
+        // Micro momentum - very low bar
+        else if (market.change24h > 0 && market.volume > 100000) {
+          reason = 'micro_momentum';
+          expectedReturn = 0.018;
+          confidence = 58 + market.volumeImpulse * 10;
+        }
+        // 🔥 NEW: Any positive momentum
+        else if (market.volume > 50000 && market.score > 40) {
+          reason = 'volume_play';
+          expectedReturn = 0.015;
+          confidence = 55;
         }
         break;
         
       case 'DISTRIBUTION_EXHAUSTION':
-        // 🔥 NEW: Short-term reversal play
-        if (market.change24h < -3 && market.change24h > -10 && market.volume > 400000) {
+        if (market.change24h < 0 && market.change24h > -15 && market.volume > 200000) {
           reason = 'dip_buy';
-          expectedReturn = 0.03;
-          confidence = 58;
+          expectedReturn = 0.025;
+          confidence = 55;
         }
         break;
     }
@@ -611,17 +614,15 @@ function validateSignals(markets: MarketData[], state: EngineState): Signal[] {
     const netReturn = expectedReturn - fees;
     const netRR = netReturn / stopPercent;
     
-    // 🔥 URGENCY: Lower R:R requirement when capital is idle
-    const requiredRR = CONFIG.MIN_REWARD_RISK - urgencyBonus;
-    if (netRR < requiredRR) continue;
+    // 🔥 ULTRA AGGRESSIVE: Almost no R:R check - just need positive net return
+    if (netReturn < 0.005) continue; // Minimum 0.5% expected profit
     
-    const slippageBudget = (fees + market.spread / 100) / expectedReturn;
-    // Relaxed slippage tolerance
-    if (slippageBudget > CONFIG.MAX_FEE_SLIPPAGE_RATIO + (noPositions ? 0.05 : 0)) continue;
+    // 🔥 ULTRA AGGRESSIVE: No slippage filter
+    // const slippageBudget = (fees + market.spread / 100) / expectedReturn;
+    // if (slippageBudget > 0.35) continue;
     
-    // Relaxed extension filter
-    if (market.change24h > 25) continue;
-    if (market.vwapRelation < -0.08) continue;
+    // 🔥 ULTRA AGGRESSIVE: Only skip extreme pumps
+    if (market.change24h > 50) continue;
     
     signals.push({
       pair: market.pair,
@@ -634,18 +635,25 @@ function validateSignals(markets: MarketData[], state: EngineState): Signal[] {
       stopLoss,
       confidence: Math.min(confidence + (noPositions ? 5 : 0), 95),
       regime: market.regime,
-      slippageBudget,
+      slippageBudget: 0,
       signal_id: generateSignalId(),
     });
   }
   
   signals.sort((a, b) => (b.confidence * b.rewardRisk) - (a.confidence * a.rewardRisk));
+  
+  // 🔥 DEBUG: Log signal count
+  console.log(`[SIGNALS] Generated ${signals.length} signals from ${eligibleMarkets.length} markets`);
+  if (signals.length > 0) {
+    console.log(`[SIGNALS] Top: ${signals[0].pair} (${signals[0].reason}) conf:${signals[0].confidence.toFixed(0)}`);
+  }
+  
   return signals;
 }
 
 // ===================== MODULE 6: EXECUTION =====================
 function generateClientOrderId(): string {
-  return `lov_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  return `t-lov_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 }
 
 async function executeLimitOrder(
@@ -1097,12 +1105,9 @@ async function runEliteCycle(): Promise<{
   const maxEntries = state.systemState === 'DEFENSE' ? 1 : (state.systemState === 'TURBO' ? 3 : 2);
   
   for (const signal of signals.slice(0, maxEntries)) {
-    // 🆕 Check correlation with existing positions
-    const correlatedCount = countCorrelatedPositions(signal.pair, state.positions);
-    if (correlatedCount >= CONFIG.MAX_CORRELATED_POSITIONS) {
-      await log('info', 'ENGINE', `⏭️ Skipping ${signal.currency} - ${correlatedCount} correlated positions`);
-      continue;
-    }
+    // 🔥 ULTRA AGGRESSIVE: Disabled correlation check to allow more entries
+    // const correlatedCount = countCorrelatedPositions(signal.pair, state.positions);
+    // if (correlatedCount >= CONFIG.MAX_CORRELATED_POSITIONS) continue;
     
     // Calculate base risk
     const risk = calculateDynamicRisk(state);
@@ -1115,12 +1120,20 @@ async function runEliteCycle(): Promise<{
       size = calculateVolatilityAdjustedSize(size, market.volatility);
     }
     
-    if (size < 5) continue;
+    console.log(`[ENTRY] ${signal.pair} | Balance: $${state.currentBalance.toFixed(2)} | Risk: ${(risk*100).toFixed(1)}% | Size: $${size.toFixed(2)}`);
+    
+    if (size < 3) { // Lowered from 5 to 3
+      await log('info', 'ENGINE', `⚠️ Size too small: ${signal.pair} $${size.toFixed(2)} < $3 min`);
+      continue;
+    }
     
     const amount = size / signal.price;
     const clientOrderId = generateClientOrderId();
     
+    await log('info', 'ENGINE', `🎯 Executing: ${signal.pair} | $${size.toFixed(2)} | ${signal.reason}`);
     const result = await executeLimitOrder(signal.pair, 'buy', amount, signal.price, clientOrderId);
+    
+    console.log(`[EXECUTE_RESULT] ${signal.pair} | success: ${result.success} | orderId: ${result.orderId || 'N/A'} | error: ${result.error || 'N/A'}`);
     
     if (result.success) {
       entryCount++;
