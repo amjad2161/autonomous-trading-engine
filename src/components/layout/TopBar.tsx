@@ -1,6 +1,6 @@
 import { Bell, RefreshCw, Wifi, WifiOff, Clock, Settings, LogOut, Menu } from "lucide-react";
-import { useSpotBalances, useTickers, useTotalPortfolioValue } from "@/hooks/useGateApi";
-import { formatUSDT } from "@/lib/gate-api";
+import { useSpotBalances, useTickers, useTotalPortfolioValue, useDailyPnL } from "@/hooks/useGateApi";
+import { formatUSDT, formatPercentage } from "@/lib/gate-api";
 import { useCredentials } from "@/hooks/useCredentials";
 import {
   DropdownMenu,
@@ -21,6 +21,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
   
   // Calculate total portfolio value (all assets converted to USDT)
   const totalPortfolioValue = useTotalPortfolioValue(balances, tickers);
+  
+  // Calculate daily P&L based on 24h price changes
+  const dailyPnL = useDailyPnL(balances, tickers);
 
   const lastUpdate = dataUpdatedAt 
     ? new Date(dataUpdatedAt).toLocaleTimeString('en-US', { 
@@ -88,8 +91,11 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         
         <div className="hidden sm:block text-center">
           <p className="text-xs text-muted-foreground">Daily P&L</p>
-          <p className="font-mono text-lg font-semibold text-profit">
-            +$0.00
+          <p className={`font-mono text-lg font-semibold ${dailyPnL.amount >= 0 ? 'text-profit' : 'text-destructive'}`}>
+            {dailyPnL.amount >= 0 ? '+' : ''}{formatUSDT(dailyPnL.amount)}
+            <span className="text-xs ml-1">
+              ({formatPercentage(dailyPnL.percent)})
+            </span>
           </p>
         </div>
         
