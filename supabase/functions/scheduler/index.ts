@@ -29,19 +29,31 @@ async function runSchedulerLoop(durationSeconds: number, intervalSeconds: number
     console.log(`[Scheduler] Cycle ${cycleCount}...`);
     
     try {
-      // Call the orchestrator
-      const { data, error } = await supabase.functions.invoke('autonomous-orchestrator', {
+      // 1. Call the orchestrator for trading
+      const { data: orchData, error: orchError } = await supabase.functions.invoke('autonomous-orchestrator', {
         body: { command: 'cycle' },
       });
       
-      if (error) {
-        console.error(`[Scheduler] Orchestrator error:`, error);
-      } else if (data?.success === false && data?.error?.includes('stopped')) {
+      if (orchError) {
+        console.error(`[Scheduler] Orchestrator error:`, orchError);
+      } else if (orchData?.success === false && orchData?.error?.includes('stopped')) {
         console.log('[Scheduler] System stopped, ending loop');
         break;
       } else {
-        console.log(`[Scheduler] Cycle ${cycleCount} complete. Balance: $${data?.balance?.toFixed(2) || 'N/A'}`);
+        console.log(`[Scheduler] Orchestrator: E:${orchData?.entries || 0} X:${orchData?.exits || 0} | $${orchData?.balance?.toFixed(2) || 'N/A'}`);
       }
+      
+      // 2. Call position manager for trailing stops and TPs
+      const { data: posData, error: posError } = await supabase.functions.invoke('position-manager', {
+        body: { command: 'manage' },
+      });
+      
+      if (posError) {
+        console.error(`[Scheduler] Position manager error:`, posError);
+      } else if (posData?.tpResults?.pnl) {
+        console.log(`[Scheduler] Position manager: Stops:${posData.stopUpdates?.length || 0} TPs:${posData.tpTriggers?.length || 0} P&L:$${posData.tpResults.pnl.toFixed(2)}`);
+      }
+      
     } catch (err) {
       console.error(`[Scheduler] Error:`, err);
     }

@@ -38,10 +38,19 @@ export interface SystemLogItem {
   created_at: string;
 }
 
+export interface PositionManagerResult {
+  positions: number;
+  stopUpdates: Array<{ symbol: string; oldStop: number; newStop: number; reason: string }>;
+  tpTriggers: Array<{ symbol: string; level: string; pnlPercent: number }>;
+  tpResults: { success: number; failed: number; pnl: number };
+  staleAlerts: Array<{ symbol: string; ageHours: number; recommendation: string }>;
+}
+
 export function useAutonomousSystem() {
   const [state, setState] = useState<SystemState | null>(null);
   const [trades, setTrades] = useState<TradeHistoryItem[]>([]);
   const [logs, setLogs] = useState<SystemLogItem[]>([]);
+  const [positionManagerStatus, setPositionManagerStatus] = useState<PositionManagerResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -132,6 +141,24 @@ export function useAutonomousSystem() {
     }
   }, [fetchState]);
 
+  // Run position manager
+  const runPositionManager = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('position-manager', {
+        body: { command: 'manage' },
+      });
+      
+      if (error) throw error;
+      
+      setPositionManagerStatus(data);
+      await fetchState();
+      return data as PositionManagerResult;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to run position manager');
+      throw err;
+    }
+  }, [fetchState]);
+
   // Auto-refresh every 10 seconds
   useEffect(() => {
     fetchState();
@@ -143,11 +170,13 @@ export function useAutonomousSystem() {
     state,
     trades,
     logs,
+    positionManagerStatus,
     isLoading,
     error,
     start,
     stop,
     runCycle,
+    runPositionManager,
     refresh: fetchState,
   };
 }
