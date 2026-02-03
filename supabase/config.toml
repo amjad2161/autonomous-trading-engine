@@ -1,1 +1,7 @@
 project_id = "aqonsqbmeoumlgaeohwd"
+
+[functions.gate-api]
+verify_jwt = false
+
+[functions.opportunity-scanner]
+verify_jwt = false
