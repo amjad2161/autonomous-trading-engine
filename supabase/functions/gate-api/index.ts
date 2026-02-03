@@ -6,11 +6,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+interface GateCredentials {
+  apiKey: string;
+  apiSecret: string;
+}
+
 interface GateRequest {
   endpoint: string;
   method?: 'GET' | 'POST' | 'DELETE';
   params?: Record<string, string>;
   body?: Record<string, unknown>;
+  credentials?: GateCredentials;
 }
 
 function generateSignature(
@@ -39,18 +45,19 @@ serve(async (req) => {
   }
 
   try {
-    const GATE_API_KEY = Deno.env.get('GATE_API_KEY');
-    const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET');
+    const { endpoint, method = 'GET', params = {}, body, credentials } = await req.json() as GateRequest;
+    
+    // Get API credentials - prefer from request, fall back to env vars
+    const GATE_API_KEY = credentials?.apiKey || Deno.env.get('GATE_API_KEY');
+    const GATE_API_SECRET = credentials?.apiSecret || Deno.env.get('GATE_API_SECRET');
 
     if (!GATE_API_KEY) {
-      throw new Error('GATE_API_KEY is not configured');
+      throw new Error('API Key is required. Please provide your Gate.io API Key.');
     }
     if (!GATE_API_SECRET) {
-      throw new Error('GATE_API_SECRET is not configured');
+      throw new Error('API Secret is required. Please provide your Gate.io API Secret.');
     }
 
-    const { endpoint, method = 'GET', params = {}, body } = await req.json() as GateRequest;
-    
     if (!endpoint) {
       throw new Error('Endpoint is required');
     }

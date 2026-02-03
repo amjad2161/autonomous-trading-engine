@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { GateCredentials } from "@/hooks/useCredentials";
 
 export interface SpotBalance {
   currency: string;
@@ -35,14 +36,27 @@ export interface OpenOrder {
   create_time: string;
 }
 
+// Get credentials from localStorage
+function getStoredCredentials(): GateCredentials | null {
+  const stored = localStorage.getItem('gate_credentials');
+  if (!stored) return null;
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return null;
+  }
+}
+
 async function callGateApi<T>(
   endpoint: string,
   method: 'GET' | 'POST' | 'DELETE' = 'GET',
   params: Record<string, string> = {},
   body?: Record<string, unknown>
 ): Promise<T> {
+  const credentials = getStoredCredentials();
+  
   const { data, error } = await supabase.functions.invoke('gate-api', {
-    body: { endpoint, method, params, body }
+    body: { endpoint, method, params, body, credentials }
   });
 
   if (error) {
