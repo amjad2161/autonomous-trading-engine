@@ -680,7 +680,10 @@ async function executeLimitOrder(
 async function reconcileState(state: EngineState, tickers: any[]): Promise<EngineState> {
   try {
     const balances = await gateRequest('/spot/accounts');
-    const openOrders = await gateRequest('/spot/orders', 'GET', { status: 'open' });
+    // Note: Skip open orders fetch if it causes issues - we don't need it for basic reconcile
+    // Don't fetch all orders at once - Gate.io requires currency_pair parameter
+    // We'll handle order cleanup per-pair when needed instead
+    const openOrders: any[] = [];
     
     const tickerMap = new Map(
       tickers.map((t: any) => [t.currency_pair, { last: parseFloat(t.last), bid: parseFloat(t.highest_bid) }])
