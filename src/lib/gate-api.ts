@@ -36,8 +36,13 @@ export interface OpenOrder {
   create_time: string;
 }
 
-// Get credentials from localStorage
+// Server mode - credentials are stored on the server, no need to send from client
+const USE_SERVER_CREDENTIALS = true;
+
+// Get credentials from localStorage (only used if not in server mode)
 function getStoredCredentials(): GateCredentials | null {
+  if (USE_SERVER_CREDENTIALS) return null; // Server will use env vars
+  
   const stored = localStorage.getItem('gate_credentials');
   if (!stored) return null;
   try {
@@ -53,7 +58,8 @@ async function callGateApi<T>(
   params: Record<string, string> = {},
   body?: Record<string, unknown>
 ): Promise<T> {
-  const credentials = getStoredCredentials();
+  // In server mode, don't send credentials - server will use env vars
+  const credentials = USE_SERVER_CREDENTIALS ? undefined : getStoredCredentials();
   
   const { data, error } = await supabase.functions.invoke('gate-api', {
     body: { endpoint, method, params, body, credentials }

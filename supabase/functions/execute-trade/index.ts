@@ -351,10 +351,16 @@ serve(async (req) => {
 
     // ============ HARD GUARDRAILS ============
     
-    // 1. Validate credentials
-    if (!credentials?.apiKey || !credentials?.apiSecret) {
-      throw new Error('Missing API credentials');
+    // 1. Get credentials - prefer from request, fall back to env vars (server mode)
+    const apiKey = credentials?.apiKey || Deno.env.get('GATE_API_KEY');
+    const apiSecret = credentials?.apiSecret || Deno.env.get('GATE_API_SECRET');
+    
+    if (!apiKey || !apiSecret) {
+      throw new Error('Missing API credentials - please configure GATE_API_KEY and GATE_API_SECRET');
     }
+    
+    // Use resolved credentials
+    const resolvedCredentials: GateCredentials = { apiKey, apiSecret };
 
     // 2. Check minimum edge threshold
     if (expectedEdge < minEdge) {
@@ -388,7 +394,7 @@ serve(async (req) => {
     // ============ EXECUTE BASED ON TYPE ============
 
     if (opportunityType === 'arbitrage' && route && route.length >= 4) {
-      const result = await executeArbitrage(credentials, route, tradeAmount, slippageTolerance);
+      const result = await executeArbitrage(resolvedCredentials, route, tradeAmount, slippageTolerance);
       return new Response(JSON.stringify({
         type: 'arbitrage',
         ...result,
@@ -415,7 +421,7 @@ serve(async (req) => {
 
     // Execute with smart order placement
     const result = await placeSmartOrder(
-      credentials,
+      resolvedCredentials,
       pair,
       side,
       amount,

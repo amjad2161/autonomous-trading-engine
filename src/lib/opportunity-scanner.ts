@@ -1,9 +1,8 @@
 import { supabase } from "@/integrations/supabase/client";
-import { GateCredentials } from "@/hooks/useCredentials";
 
 export interface Opportunity {
   id: string;
-  type: 'arbitrage' | 'spread' | 'breakout' | 'reversion';
+  type: 'arbitrage' | 'spread' | 'breakout' | 'reversion' | 'momentum' | 'volume_spike';
   symbol: string;
   expectedEdge: number;
   confidence: number;
@@ -11,6 +10,9 @@ export interface Opportunity {
   riskLevel: 'low' | 'medium' | 'high';
   details: string;
   route?: string[];
+  entryPrice?: number;
+  targetPrice?: number;
+  stopLoss?: number;
 }
 
 export interface ScanResult {
@@ -21,22 +23,15 @@ export interface ScanResult {
   error?: string;
 }
 
-// Get credentials from localStorage
-function getStoredCredentials(): GateCredentials | null {
-  const stored = localStorage.getItem('gate_credentials');
-  if (!stored) return null;
-  try {
-    return JSON.parse(stored);
-  } catch {
-    return null;
-  }
-}
+// Server mode - credentials are stored on the server
+const USE_SERVER_CREDENTIALS = true;
 
 export async function scanOpportunities(
   minSpread = 0.15,
   minVolume = 50000
 ): Promise<ScanResult> {
-  const credentials = getStoredCredentials();
+  // In server mode, don't send credentials - server will use env vars
+  const credentials = USE_SERVER_CREDENTIALS ? undefined : null;
   
   const { data, error } = await supabase.functions.invoke('opportunity-scanner', {
     body: { credentials, minSpread, minVolume }
