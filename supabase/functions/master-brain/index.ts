@@ -10,7 +10,6 @@ const corsHeaders = {
 
 // ============ MASTER CONFIGURATION ============
 const MASTER_CONFIG = {
-  // Capital allocation per market regime
   regimes: {
     trending: { momentum: 0.4, whale: 0.3, grid: 0.1, dca: 0.2 },
     ranging: { momentum: 0.1, whale: 0.2, grid: 0.5, dca: 0.2 },
@@ -18,45 +17,61 @@ const MASTER_CONFIG = {
     crash: { momentum: 0.0, whale: 0.1, grid: 0.2, dca: 0.7 },
     pump: { momentum: 0.5, whale: 0.3, grid: 0.1, dca: 0.1 },
   },
-  // Risk limits
-  maxTotalExposure: 0.7,      // 70% max in positions
-  maxSinglePosition: 0.15,    // 15% max per position
-  maxDailyLoss: -0.05,        // -5% daily loss limit
+  maxTotalExposure: 0.7,
+  maxSinglePosition: 0.15,
+  maxDailyLoss: -0.05,
   maxOpenPositions: 12,
   minTradeSize: 5,
-  // Timing
-  decisionInterval: 500,      // ms between decisions
-  staleDataThreshold: 5000,   // 5s = stale data
+  // Dynamic reallocation settings
+  reallocation: {
+    minEdgeImprovement: 0.5,   // New opportunity must be 0.5% better
+    dustThreshold: 1.0,        // Convert balances under $1 to USDT
+    minHoldTime: 30,           // Min 30 seconds before swap
+    forceLiquidateAt: -2.0,    // Force liquidate losing positions for better opportunities
+    opportunityCostWeight: 0.3, // How much to weight opportunity cost in decisions
+  },
+  decisionInterval: 500,
+  staleDataThreshold: 5000,
 };
 
 // ============ TYPES ============
 type MarketRegime = 'trending' | 'ranging' | 'volatile' | 'crash' | 'pump';
 type Strategy = 'momentum' | 'whale' | 'grid' | 'dca';
-type Signal = {
+
+interface Signal {
   strategy: Strategy;
   symbol: string;
-  action: 'buy' | 'sell' | 'hold';
-  strength: number;      // 0-100
+  action: 'buy' | 'sell';
+  strength: number;
+  expectedEdge: number;
   reason: string;
-  suggestedSize: number; // in USDT
+  suggestedSize: number;
   entryPrice: number;
   targetPrice: number;
   stopLoss: number;
-  timeframe: number;     // expected hold time in seconds
-};
+  timeframe: number;
+  urgency: number;
+}
 
 interface Position {
   id: string;
   symbol: string;
   strategy: Strategy;
-  side: 'long';
   entryPrice: number;
   amount: number;
   usdValue: number;
+  currentValue: number;
+  pnlPercent: number;
   stopLoss: number;
   takeProfit: number;
   timestamp: number;
   trailingStop?: number;
+}
+
+interface WalletBalance {
+  currency: string;
+  available: number;
+  usdValue: number;
 }
 
 interface MarketData {
@@ -66,27 +81,11 @@ interface MarketData {
   ask: number;
   spread: number;
   volume24h: number;
-  change1h: number;
   change24h: number;
   high24h: number;
   low24h: number;
   volatility: number;
-  momentum: number;
   lastUpdate: number;
-}
-
-interface BrainState {
-  regime: MarketRegime;
-  regimeConfidence: number;
-  totalBalance: number;
-  freeBalance: number;
-  exposurePercent: number;
-  positions: Position[];
-  dailyPnL: number;
-  dailyTrades: number;
-  lastSignals: Signal[];
-  isHalted: boolean;
-  haltReason?: string;
 }
 
 // ============ GATE.IO API ============
@@ -132,8 +131,8 @@ async function gateRequest(
 }
 
 async function getFullState(apiKey: string, apiSecret: string): Promise<{
-  balance: number;
-  positions: { currency: string; available: string; locked: string }[];
+  usdtBalance: number;
+  walletBalances: WalletBalance[];
   markets: MarketData[];
 }> {
   const [accounts, tickers] = await Promise.all([
@@ -150,9 +149,6 @@ async function getFullState(apiKey: string, apiSecret: string): Promise<{
     }>>,
   ]);
   
-  const usdt = accounts.find(a => a.currency === 'USDT');
-  const balance = usdt ? parseFloat(usdt.available) + parseFloat(usdt.locked || '0') : 0;
-  
   const now = Date.now();
   const markets: MarketData[] = tickers
     .filter(t => t.currency_pair.endsWith('_USDT'))
@@ -162,8 +158,6 @@ async function getFullState(apiKey: string, apiSecret: string): Promise<{
       const low = parseFloat(t.low_24h);
       const bid = parseFloat(t.highest_bid);
       const ask = parseFloat(t.lowest_ask);
-      const change = parseFloat(t.change_percentage);
-      const volatility = price > 0 ? ((high - low) / price) * 100 : 0;
       
       return {
         symbol: t.currency_pair,
@@ -172,27 +166,43 @@ async function getFullState(apiKey: string, apiSecret: string): Promise<{
         ask,
         spread: price > 0 ? ((ask - bid) / price) * 100 : 0,
         volume24h: parseFloat(t.quote_volume),
-        change1h: change / 24, // Approximation
-        change24h: change,
+        change24h: parseFloat(t.change_percentage),
         high24h: high,
         low24h: low,
-        volatility,
-        momentum: change > 0 ? Math.min(change / 10, 1) : Math.max(change / 10, -1),
+        volatility: price > 0 ? ((high - low) / price) * 100 : 0,
         lastUpdate: now,
       };
     })
     .filter(m => m.price > 0 && m.volume24h > 50000);
   
-  return { balance, positions: accounts, markets };
+  // Calculate wallet balances with USD values
+  const walletBalances: WalletBalance[] = [];
+  let usdtBalance = 0;
+  
+  for (const acc of accounts) {
+    const available = parseFloat(acc.available) + parseFloat(acc.locked || '0');
+    if (available <= 0) continue;
+    
+    if (acc.currency === 'USDT') {
+      usdtBalance = available;
+      walletBalances.push({ currency: 'USDT', available, usdValue: available });
+    } else {
+      const market = markets.find(m => m.symbol === `${acc.currency}_USDT`);
+      if (market) {
+        const usdValue = available * market.price;
+        walletBalances.push({ currency: acc.currency, available, usdValue });
+      }
+    }
+  }
+  
+  return { usdtBalance, walletBalances, markets };
 }
 
 async function executeOrder(
   apiKey: string, apiSecret: string,
-  symbol: string, side: 'buy' | 'sell', amountUsdt: number, price: number
+  symbol: string, side: 'buy' | 'sell', amount: string
 ): Promise<{ success: boolean; orderId?: string; filledAmount?: number; avgPrice?: number; error?: string }> {
   try {
-    const amount = (amountUsdt / price).toFixed(6);
-    
     const result = await gateRequest('POST', '/api/v4/spot/orders', apiKey, apiSecret, {}, {
       currency_pair: symbol,
       type: 'market',
@@ -206,7 +216,7 @@ async function executeOrder(
         success: true,
         orderId: result.id,
         filledAmount: parseFloat(result.amount || '0'),
-        avgPrice: parseFloat(result.avg_deal_price || String(price)),
+        avgPrice: parseFloat(result.avg_deal_price || '0'),
       };
     }
     return { success: false, error: result.message || 'Unknown error' };
@@ -215,184 +225,239 @@ async function executeOrder(
   }
 }
 
+// ============ SMART CAPITAL REALLOCATION ============
+interface ReallocationDecision {
+  type: 'liquidate' | 'convert_dust' | 'swap';
+  position?: Position;
+  balance?: WalletBalance;
+  reason: string;
+  freedAmount: number;
+  forOpportunity?: Signal;
+}
+
+function evaluateReallocation(
+  positions: Position[],
+  walletBalances: WalletBalance[],
+  signals: Signal[],
+  freeUsdt: number,
+  markets: MarketData[]
+): ReallocationDecision[] {
+  const decisions: ReallocationDecision[] = [];
+  const now = Date.now();
+  
+  // 1. CONVERT DUST - Small balances that aren't worth keeping
+  for (const balance of walletBalances) {
+    if (balance.currency === 'USDT') continue;
+    if (balance.usdValue < MASTER_CONFIG.reallocation.dustThreshold && balance.usdValue > 0.1) {
+      decisions.push({
+        type: 'convert_dust',
+        balance,
+        reason: `Dust cleanup: ${balance.currency} worth $${balance.usdValue.toFixed(2)}`,
+        freedAmount: balance.usdValue * 0.995, // Account for fees
+      });
+    }
+  }
+  
+  // 2. SMART SWAP - Close position for better opportunity
+  const topOpportunities = signals.filter(s => s.expectedEdge > 0.5).slice(0, 5);
+  
+  for (const opportunity of topOpportunities) {
+    // Skip if we have enough free capital
+    if (freeUsdt >= opportunity.suggestedSize) continue;
+    
+    // Find worst performing position that can be swapped
+    const swappablePositions = positions
+      .filter(p => {
+        const holdTime = (now - p.timestamp) / 1000;
+        return holdTime >= MASTER_CONFIG.reallocation.minHoldTime;
+      })
+      .sort((a, b) => a.pnlPercent - b.pnlPercent); // Worst first
+    
+    for (const pos of swappablePositions) {
+      // Calculate if swap is worth it
+      const currentPotential = pos.pnlPercent < 0 ? pos.pnlPercent : (pos.takeProfit - pos.entryPrice) / pos.entryPrice * 100 - pos.pnlPercent;
+      const edgeImprovement = opportunity.expectedEdge - currentPotential;
+      
+      if (edgeImprovement >= MASTER_CONFIG.reallocation.minEdgeImprovement) {
+        // Force liquidate losing positions for much better opportunities
+        if (pos.pnlPercent <= MASTER_CONFIG.reallocation.forceLiquidateAt || edgeImprovement >= 1.0) {
+          decisions.push({
+            type: 'swap',
+            position: pos,
+            reason: `Swap ${pos.symbol} (${pos.pnlPercent.toFixed(2)}%) for ${opportunity.symbol} (+${opportunity.expectedEdge.toFixed(2)}% edge)`,
+            freedAmount: pos.currentValue * 0.995,
+            forOpportunity: opportunity,
+          });
+          break; // One swap per opportunity
+        }
+      }
+    }
+  }
+  
+  // 3. FORCE LIQUIDATE - Very bad positions
+  for (const pos of positions) {
+    if (pos.pnlPercent <= -3.0) { // -3% or worse
+      const holdTime = (now - pos.timestamp) / 1000;
+      if (holdTime > 60) { // Held for over a minute
+        decisions.push({
+          type: 'liquidate',
+          position: pos,
+          reason: `Force liquidate ${pos.symbol} at ${pos.pnlPercent.toFixed(2)}% - cut losses`,
+          freedAmount: pos.currentValue * 0.995,
+        });
+      }
+    }
+  }
+  
+  return decisions;
+}
+
 // ============ MARKET REGIME DETECTION ============
 function detectMarketRegime(markets: MarketData[]): { regime: MarketRegime; confidence: number } {
-  // Analyze top 20 markets by volume
-  const topMarkets = markets
-    .sort((a, b) => b.volume24h - a.volume24h)
-    .slice(0, 20);
+  const topMarkets = markets.sort((a, b) => b.volume24h - a.volume24h).slice(0, 20);
   
   const avgChange = topMarkets.reduce((s, m) => s + m.change24h, 0) / topMarkets.length;
   const avgVolatility = topMarkets.reduce((s, m) => s + m.volatility, 0) / topMarkets.length;
   const bullishCount = topMarkets.filter(m => m.change24h > 2).length;
   const bearishCount = topMarkets.filter(m => m.change24h < -2).length;
   
-  // Crash: Most assets down significantly
-  if (avgChange < -5 || bearishCount >= 15) {
-    return { regime: 'crash', confidence: Math.min(Math.abs(avgChange) * 5, 95) };
-  }
+  if (avgChange < -5 || bearishCount >= 15) return { regime: 'crash', confidence: Math.min(Math.abs(avgChange) * 5, 95) };
+  if (avgChange > 5 || bullishCount >= 15) return { regime: 'pump', confidence: Math.min(avgChange * 5, 95) };
+  if (avgVolatility > 8) return { regime: 'volatile', confidence: Math.min(avgVolatility * 5, 85) };
+  if (Math.abs(avgChange) > 2 && avgVolatility > 3) return { regime: 'trending', confidence: Math.min(Math.abs(avgChange) * 10, 80) };
   
-  // Pump: Most assets up significantly
-  if (avgChange > 5 || bullishCount >= 15) {
-    return { regime: 'pump', confidence: Math.min(avgChange * 5, 95) };
-  }
-  
-  // Volatile: High volatility but mixed direction
-  if (avgVolatility > 8) {
-    return { regime: 'volatile', confidence: Math.min(avgVolatility * 5, 85) };
-  }
-  
-  // Trending: Clear direction with moderate volatility
-  if (Math.abs(avgChange) > 2 && avgVolatility > 3) {
-    return { regime: 'trending', confidence: Math.min(Math.abs(avgChange) * 10, 80) };
-  }
-  
-  // Ranging: Low volatility, mixed direction
   return { regime: 'ranging', confidence: Math.max(60 - avgVolatility * 5, 40) };
 }
 
-// ============ UNIFIED SIGNAL GENERATION ============
+// ============ SIGNAL GENERATION ============
 function generateSignals(
   markets: MarketData[],
   regime: MarketRegime,
-  state: BrainState,
+  freeUsdt: number,
+  positions: Position[],
   allocation: Record<Strategy, number>
 ): Signal[] {
   const signals: Signal[] = [];
-  const now = Date.now();
   
   for (const market of markets.slice(0, 50)) {
-    // Skip if already have position
-    if (state.positions.some(p => p.symbol === market.symbol)) continue;
+    if (positions.some(p => p.symbol === market.symbol)) continue;
     
-    // Skip stale data
-    if (now - market.lastUpdate > MASTER_CONFIG.staleDataThreshold) continue;
+    const positionInRange = market.price > 0 ? (market.price - market.low24h) / (market.high24h - market.low24h) : 0.5;
     
-    const positionInRange = market.price > 0 ? 
-      (market.price - market.low24h) / (market.high24h - market.low24h) : 0.5;
+    // MOMENTUM - Breakout
+    if (allocation.momentum > 0.05 && market.change24h >= 4 && positionInRange >= 0.9) {
+      const expectedEdge = Math.min(market.change24h * 0.3, 3);
+      signals.push({
+        strategy: 'momentum',
+        symbol: market.symbol,
+        action: 'buy',
+        strength: Math.min(market.change24h * 8, 95),
+        expectedEdge,
+        reason: `Breakout +${market.change24h.toFixed(1)}%`,
+        suggestedSize: freeUsdt * allocation.momentum * 0.3,
+        entryPrice: market.price,
+        targetPrice: market.price * (1 + expectedEdge / 100),
+        stopLoss: market.price * 0.985,
+        timeframe: 180,
+        urgency: Math.min(market.change24h * 5, 90),
+      });
+    }
     
-    // ========== MOMENTUM SIGNALS ==========
-    if (allocation.momentum > 0.05) {
-      // Breakout: Near high with strong momentum
-      if (market.change24h >= 4 && positionInRange >= 0.9 && market.volatility >= 3) {
+    // MOMENTUM - Oversold bounce
+    if (allocation.momentum > 0.05 && market.change24h <= -6 && positionInRange <= 0.15) {
+      const expectedEdge = Math.abs(market.change24h) * 0.25;
+      signals.push({
+        strategy: 'momentum',
+        symbol: market.symbol,
+        action: 'buy',
+        strength: Math.min(Math.abs(market.change24h) * 6, 90),
+        expectedEdge,
+        reason: `Oversold bounce ${market.change24h.toFixed(1)}%`,
+        suggestedSize: freeUsdt * allocation.momentum * 0.25,
+        entryPrice: market.price,
+        targetPrice: market.price * (1 + expectedEdge / 100),
+        stopLoss: market.low24h * 0.98,
+        timeframe: 300,
+        urgency: 70,
+      });
+    }
+    
+    // WHALE - Volume spike
+    if (allocation.whale > 0.05 && market.change24h > 3 && positionInRange > 0.7 && market.volume24h > 1000000) {
+      const expectedEdge = 1.2;
+      signals.push({
+        strategy: 'whale',
+        symbol: market.symbol,
+        action: 'buy',
+        strength: Math.min(market.change24h * 10, 90),
+        expectedEdge,
+        reason: `Whale activity detected`,
+        suggestedSize: freeUsdt * allocation.whale * 0.4,
+        entryPrice: market.price,
+        targetPrice: market.price * 1.012,
+        stopLoss: market.price * 0.992,
+        timeframe: 120,
+        urgency: 85,
+      });
+    }
+    
+    // GRID - Ranging market
+    if (allocation.grid > 0.05 && regime === 'ranging' && market.spread >= 0.15 && market.volatility >= 2 && market.volatility <= 6) {
+      const expectedEdge = market.spread * 0.6;
+      signals.push({
+        strategy: 'grid',
+        symbol: market.symbol,
+        action: 'buy',
+        strength: Math.min(market.spread * 100, 85),
+        expectedEdge,
+        reason: `Grid: ${market.spread.toFixed(2)}% spread`,
+        suggestedSize: freeUsdt * allocation.grid * 0.2,
+        entryPrice: market.bid + (market.spread * market.price / 400),
+        targetPrice: market.ask - (market.spread * market.price / 400),
+        stopLoss: market.bid * 0.995,
+        timeframe: 60,
+        urgency: 50,
+      });
+    }
+    
+    // DCA - Dip buying
+    if (allocation.dca > 0.05 && market.change24h <= -4 && market.volume24h > 500000) {
+      const dcaCount = positions.filter(p => p.symbol === market.symbol && p.strategy === 'dca').length;
+      if (dcaCount < 5) {
+        const multiplier = Math.pow(1.5, dcaCount);
+        const expectedEdge = 2.5;
         signals.push({
-          strategy: 'momentum',
+          strategy: 'dca',
           symbol: market.symbol,
           action: 'buy',
-          strength: Math.min(market.change24h * 8 + market.volatility * 5, 95),
-          reason: `Breakout: +${market.change24h.toFixed(1)}% at 24h high`,
-          suggestedSize: state.freeBalance * allocation.momentum * 0.3,
-          entryPrice: market.price,
-          targetPrice: market.price * 1.02,
-          stopLoss: market.price * 0.985,
-          timeframe: 180,
-        });
-      }
-      
-      // Oversold bounce
-      if (market.change24h <= -6 && positionInRange <= 0.15) {
-        signals.push({
-          strategy: 'momentum',
-          symbol: market.symbol,
-          action: 'buy',
-          strength: Math.min(Math.abs(market.change24h) * 6, 90),
-          reason: `Oversold bounce: ${market.change24h.toFixed(1)}% near low`,
-          suggestedSize: state.freeBalance * allocation.momentum * 0.25,
+          strength: Math.min(Math.abs(market.change24h) * 10, 85),
+          expectedEdge,
+          reason: `DCA Level ${dcaCount + 1}: ${market.change24h.toFixed(1)}%`,
+          suggestedSize: freeUsdt * allocation.dca * 0.2 * multiplier,
           entryPrice: market.price,
           targetPrice: market.price * 1.025,
-          stopLoss: market.low24h * 0.98,
-          timeframe: 300,
+          stopLoss: market.price * 0.95,
+          timeframe: 3600,
+          urgency: 40,
         });
-      }
-    }
-    
-    // ========== WHALE SIGNALS ==========
-    if (allocation.whale > 0.05) {
-      // Volume spike + momentum = whale activity
-      const avgVolume = market.volume24h / 24; // Hourly average
-      const isHighVolume = market.volume24h > avgVolume * 3;
-      
-      if (isHighVolume && market.change24h > 3 && positionInRange > 0.7) {
-        signals.push({
-          strategy: 'whale',
-          symbol: market.symbol,
-          action: 'buy',
-          strength: Math.min(market.change24h * 10 + 20, 90),
-          reason: `Whale detected: High volume + ${market.change24h.toFixed(1)}% up`,
-          suggestedSize: state.freeBalance * allocation.whale * 0.4,
-          entryPrice: market.price,
-          targetPrice: market.price * 1.015,
-          stopLoss: market.price * 0.992,
-          timeframe: 120,
-        });
-      }
-    }
-    
-    // ========== GRID SIGNALS ==========
-    if (allocation.grid > 0.05 && regime === 'ranging') {
-      // Good spread + ranging market = grid opportunity
-      if (market.spread >= 0.15 && market.volatility >= 2 && market.volatility <= 6) {
-        signals.push({
-          strategy: 'grid',
-          symbol: market.symbol,
-          action: 'buy',
-          strength: Math.min(market.spread * 100 + market.volatility * 10, 85),
-          reason: `Grid opportunity: ${market.spread.toFixed(2)}% spread, ${market.volatility.toFixed(1)}% vol`,
-          suggestedSize: state.freeBalance * allocation.grid * 0.2,
-          entryPrice: market.bid + (market.spread * market.price / 400),
-          targetPrice: market.ask - (market.spread * market.price / 400),
-          stopLoss: market.bid * 0.995,
-          timeframe: 60,
-        });
-      }
-    }
-    
-    // ========== DCA SIGNALS ==========
-    if (allocation.dca > 0.05) {
-      // Significant dip in quality asset
-      if (market.change24h <= -4 && market.volume24h > 500000) {
-        const dcaLevel = state.positions.filter(p => p.symbol === market.symbol && p.strategy === 'dca').length;
-        
-        if (dcaLevel < 5) {
-          const sizeMultiplier = Math.pow(1.5, dcaLevel);
-          signals.push({
-            strategy: 'dca',
-            symbol: market.symbol,
-            action: 'buy',
-            strength: Math.min(Math.abs(market.change24h) * 10 + dcaLevel * 5, 85),
-            reason: `DCA Level ${dcaLevel + 1}: ${market.change24h.toFixed(1)}% dip`,
-            suggestedSize: state.freeBalance * allocation.dca * 0.2 * sizeMultiplier,
-            entryPrice: market.price,
-            targetPrice: market.price * 1.03,
-            stopLoss: market.price * 0.95,
-            timeframe: 3600,
-          });
-        }
       }
     }
   }
   
-  // Sort by strength and return top signals
-  return signals.sort((a, b) => b.strength - a.strength);
+  return signals.sort((a, b) => (b.strength + b.urgency) / 2 - (a.strength + a.urgency) / 2);
 }
 
-// ============ POSITION MANAGEMENT ==========
-function evaluatePositions(
-  positions: Position[],
-  markets: MarketData[]
-): { exits: { position: Position; reason: string; pnl: number }[]; updates: { position: Position; newStop: number }[] } {
-  const exits: { position: Position; reason: string; pnl: number }[] = [];
-  const updates: { position: Position; newStop: number }[] = [];
+// ============ POSITION MANAGEMENT ============
+function evaluatePositions(positions: Position[], markets: MarketData[]): { exits: { pos: Position; reason: string; pnl: number }[] } {
+  const exits: { pos: Position; reason: string; pnl: number }[] = [];
   const now = Date.now();
   
   for (const pos of positions) {
     const market = markets.find(m => m.symbol === pos.symbol);
     if (!market) continue;
     
-    const pnlPercent = ((market.price - pos.entryPrice) / pos.entryPrice) * 100;
     const holdTime = (now - pos.timestamp) / 1000;
     
-    // Dynamic TP/SL based on strategy
     const targets = {
       momentum: { tp: 1.5, sl: -1.0, maxHold: 180 },
       whale: { tp: 1.0, sl: -0.8, maxHold: 120 },
@@ -400,58 +465,16 @@ function evaluatePositions(
       dca: { tp: 2.5, sl: -4.0, maxHold: 7200 },
     }[pos.strategy];
     
-    // Take profit
-    if (pnlPercent >= targets.tp) {
-      exits.push({ position: pos, reason: `TP ${pnlPercent.toFixed(2)}%`, pnl: pnlPercent });
-      continue;
-    }
-    
-    // Stop loss
-    if (pnlPercent <= targets.sl) {
-      exits.push({ position: pos, reason: `SL ${pnlPercent.toFixed(2)}%`, pnl: pnlPercent });
-      continue;
-    }
-    
-    // Trailing stop for profitable positions
-    if (pnlPercent > 0.3 && pos.strategy !== 'dca') {
-      const trailingDistance = pos.strategy === 'momentum' ? 0.005 : 0.008;
-      const newStop = market.price * (1 - trailingDistance);
-      
-      if (!pos.trailingStop || newStop > pos.trailingStop) {
-        updates.push({ position: pos, newStop });
-      } else if (market.price < pos.trailingStop) {
-        exits.push({ position: pos, reason: `Trailing stop hit`, pnl: pnlPercent });
-        continue;
-      }
-    }
-    
-    // Time-based exit with any profit
-    if (holdTime > targets.maxHold && pnlPercent > 0.1) {
-      exits.push({ position: pos, reason: `Time exit +${pnlPercent.toFixed(2)}%`, pnl: pnlPercent });
+    if (pos.pnlPercent >= targets.tp) {
+      exits.push({ pos, reason: `TP ${pos.pnlPercent.toFixed(2)}%`, pnl: pos.pnlPercent });
+    } else if (pos.pnlPercent <= targets.sl) {
+      exits.push({ pos, reason: `SL ${pos.pnlPercent.toFixed(2)}%`, pnl: pos.pnlPercent });
+    } else if (holdTime > targets.maxHold && pos.pnlPercent > 0.1) {
+      exits.push({ pos, reason: `Time exit +${pos.pnlPercent.toFixed(2)}%`, pnl: pos.pnlPercent });
     }
   }
   
-  return { exits, updates };
-}
-
-// ============ RISK MANAGEMENT ============
-function checkRiskLimits(state: BrainState): { canTrade: boolean; reason?: string } {
-  // Daily loss limit
-  if (state.dailyPnL <= MASTER_CONFIG.maxDailyLoss * state.totalBalance) {
-    return { canTrade: false, reason: `Daily loss limit hit: ${((state.dailyPnL / state.totalBalance) * 100).toFixed(2)}%` };
-  }
-  
-  // Max exposure
-  if (state.exposurePercent >= MASTER_CONFIG.maxTotalExposure * 100) {
-    return { canTrade: false, reason: `Max exposure reached: ${state.exposurePercent.toFixed(1)}%` };
-  }
-  
-  // Max positions
-  if (state.positions.length >= MASTER_CONFIG.maxOpenPositions) {
-    return { canTrade: false, reason: `Max positions: ${state.positions.length}` };
-  }
-  
-  return { canTrade: true };
+  return { exits };
 }
 
 // ============ MAIN BRAIN LOOP ============
@@ -460,10 +483,7 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-  );
+  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
   try {
     const { durationSeconds = 300 } = await req.json();
@@ -473,235 +493,233 @@ serve(async (req) => {
     const apiKey = Deno.env.get('GATE_API_KEY');
     const apiSecret = Deno.env.get('GATE_API_SECRET');
     
-    if (!apiKey || !apiSecret) {
-      throw new Error('Missing Gate.io credentials');
-    }
+    if (!apiKey || !apiSecret) throw new Error('Missing Gate.io credentials');
 
-    console.log(`\n🧠 [MASTER BRAIN] Starting intelligent trading session (${durationSeconds}s)`);
-    console.log('━'.repeat(60));
+    console.log(`\n🧠 [MASTER BRAIN] Starting with smart capital reallocation (${durationSeconds}s)`);
     
-    // State tracking
     const positions: Position[] = [];
     let totalPnL = 0;
     let totalTrades = 0;
-    const strategyStats: Record<Strategy, { trades: number; pnl: number }> = {
-      momentum: { trades: 0, pnl: 0 },
-      whale: { trades: 0, pnl: 0 },
-      grid: { trades: 0, pnl: 0 },
-      dca: { trades: 0, pnl: 0 },
-    };
+    let reallocations = 0;
+    let dustConverted = 0;
     let lastRegime: MarketRegime = 'ranging';
     let cycleCount = 0;
 
     while (Date.now() < endTime) {
       cycleCount++;
-      const cycleStart = Date.now();
       
       try {
-        // ========== 1. GET MARKET STATE ==========
-        const { balance, markets } = await getFullState(apiKey, apiSecret);
+        const { usdtBalance, walletBalances, markets } = await getFullState(apiKey, apiSecret);
         
-        const usedBalance = positions.reduce((s, p) => s + p.usdValue, 0);
-        const freeBalance = Math.max(balance - usedBalance, 0);
-        const exposurePercent = balance > 0 ? (usedBalance / balance) * 100 : 0;
+        // Update position values
+        for (const pos of positions) {
+          const market = markets.find(m => m.symbol === pos.symbol);
+          if (market) {
+            pos.currentValue = pos.amount * market.price;
+            pos.pnlPercent = ((market.price - pos.entryPrice) / pos.entryPrice) * 100;
+          }
+        }
         
-        // ========== 2. DETECT MARKET REGIME ==========
-        const { regime, confidence: regimeConfidence } = detectMarketRegime(markets);
+        const lockedInPositions = positions.reduce((s, p) => s + p.currentValue, 0);
+        const totalBalance = usdtBalance + lockedInPositions;
+        const freeUsdt = usdtBalance;
         
+        // Detect regime
+        const { regime, confidence } = detectMarketRegime(markets);
         if (regime !== lastRegime) {
-          console.log(`\n📊 [REGIME CHANGE] ${lastRegime} → ${regime} (${regimeConfidence}% confidence)`);
+          console.log(`📊 [REGIME] ${lastRegime} → ${regime} (${confidence.toFixed(0)}%)`);
           lastRegime = regime;
         }
         
-        // Get allocation for current regime
         const allocation = MASTER_CONFIG.regimes[regime];
         
-        // ========== 3. BUILD BRAIN STATE ==========
-        const brainState: BrainState = {
-          regime,
-          regimeConfidence,
-          totalBalance: balance,
-          freeBalance,
-          exposurePercent,
-          positions,
-          dailyPnL: totalPnL,
-          dailyTrades: totalTrades,
-          lastSignals: [],
-          isHalted: false,
-        };
+        // ========== 1. EXIT EXISTING POSITIONS ==========
+        const { exits } = evaluatePositions(positions, markets);
         
-        // ========== 4. CHECK RISK LIMITS ==========
-        const riskCheck = checkRiskLimits(brainState);
-        if (!riskCheck.canTrade) {
-          console.log(`⚠️  [RISK] ${riskCheck.reason}`);
-          await new Promise(r => setTimeout(r, 2000));
-          continue;
-        }
-        
-        // ========== 5. MANAGE EXISTING POSITIONS ==========
-        const { exits, updates } = evaluatePositions(positions, markets);
-        
-        // Execute exits
-        for (const exit of exits) {
-          const market = markets.find(m => m.symbol === exit.position.symbol);
+        for (const { pos, reason, pnl } of exits) {
+          const market = markets.find(m => m.symbol === pos.symbol);
           if (!market) continue;
           
-          const sellAmount = exit.position.amount * 0.998;
-          const result = await executeOrder(apiKey, apiSecret, exit.position.symbol, 'sell', sellAmount * market.price, market.price);
+          const sellAmount = (pos.amount * 0.998).toFixed(6);
+          const result = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount);
           
           if (result.success) {
-            const pnlUsd = exit.position.usdValue * (exit.pnl / 100);
+            const pnlUsd = pos.usdValue * (pnl / 100);
             totalPnL += pnlUsd;
             totalTrades++;
-            strategyStats[exit.position.strategy].trades++;
-            strategyStats[exit.position.strategy].pnl += pnlUsd;
             
-            console.log(`✅ [EXIT] ${exit.position.symbol} | ${exit.reason} | $${pnlUsd.toFixed(2)}`);
+            console.log(`✅ [EXIT] ${pos.symbol} | ${reason} | $${pnlUsd.toFixed(2)}`);
             
-            // Log to database
             await supabase.from('trade_history').insert({
-              symbol: exit.position.symbol.replace('_', '/'),
-              type: exit.position.strategy,
+              symbol: pos.symbol.replace('_', '/'),
+              type: pos.strategy,
               side: 'sell',
-              amount: sellAmount,
+              amount: pos.amount,
               price: market.price,
-              expected_edge: exit.pnl,
               actual_pnl: pnlUsd,
               status: 'executed',
-              executed_at: new Date().toISOString(),
             });
             
-            // Remove position
-            const idx = positions.findIndex(p => p.id === exit.position.id);
+            const idx = positions.findIndex(p => p.id === pos.id);
             if (idx > -1) positions.splice(idx, 1);
           }
         }
         
-        // Update trailing stops
-        for (const update of updates) {
-          const pos = positions.find(p => p.id === update.position.id);
-          if (pos) pos.trailingStop = update.newStop;
+        // ========== 2. GENERATE SIGNALS ==========
+        const signals = generateSignals(markets, regime, freeUsdt, positions, allocation);
+        
+        // ========== 3. SMART REALLOCATION ==========
+        const reallocationDecisions = evaluateReallocation(positions, walletBalances, signals, freeUsdt, markets);
+        
+        for (const decision of reallocationDecisions) {
+          if (decision.type === 'convert_dust' && decision.balance) {
+            const symbol = `${decision.balance.currency}_USDT`;
+            const market = markets.find(m => m.symbol === symbol);
+            if (!market) continue;
+            
+            const sellAmount = (decision.balance.available * 0.99).toFixed(6);
+            const result = await executeOrder(apiKey, apiSecret, symbol, 'sell', sellAmount);
+            
+            if (result.success) {
+              dustConverted += decision.freedAmount;
+              console.log(`🧹 [DUST] Converted ${decision.balance.currency} → +$${decision.freedAmount.toFixed(2)} USDT`);
+            }
+          } else if (decision.type === 'swap' && decision.position && decision.forOpportunity) {
+            const pos = decision.position;
+            const opp = decision.forOpportunity;
+            const market = markets.find(m => m.symbol === pos.symbol);
+            if (!market) continue;
+            
+            // Sell current position
+            const sellAmount = (pos.amount * 0.998).toFixed(6);
+            const sellResult = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount);
+            
+            if (sellResult.success) {
+              const pnlUsd = pos.usdValue * (pos.pnlPercent / 100);
+              totalPnL += pnlUsd;
+              
+              console.log(`🔄 [SWAP] Sold ${pos.symbol} (${pos.pnlPercent.toFixed(2)}%) → Buying ${opp.symbol}`);
+              
+              // Remove old position
+              const idx = positions.findIndex(p => p.id === pos.id);
+              if (idx > -1) positions.splice(idx, 1);
+              
+              // Buy new opportunity
+              const oppMarket = markets.find(m => m.symbol === opp.symbol);
+              if (oppMarket) {
+                const buyAmount = (decision.freedAmount / oppMarket.price).toFixed(6);
+                const buyResult = await executeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyAmount);
+                
+                if (buyResult.success) {
+                  positions.push({
+                    id: `${opp.symbol}-${Date.now()}`,
+                    symbol: opp.symbol,
+                    strategy: opp.strategy,
+                    entryPrice: buyResult.avgPrice || oppMarket.price,
+                    amount: buyResult.filledAmount || parseFloat(buyAmount),
+                    usdValue: decision.freedAmount,
+                    currentValue: decision.freedAmount,
+                    pnlPercent: 0,
+                    stopLoss: opp.stopLoss,
+                    takeProfit: opp.targetPrice,
+                    timestamp: Date.now(),
+                  });
+                  
+                  reallocations++;
+                  totalTrades += 2;
+                  console.log(`   ✅ Entered ${opp.symbol} @ $${oppMarket.price.toFixed(6)}`);
+                }
+              }
+            }
+          } else if (decision.type === 'liquidate' && decision.position) {
+            const pos = decision.position;
+            const market = markets.find(m => m.symbol === pos.symbol);
+            if (!market) continue;
+            
+            const sellAmount = (pos.amount * 0.998).toFixed(6);
+            const result = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount);
+            
+            if (result.success) {
+              const pnlUsd = pos.usdValue * (pos.pnlPercent / 100);
+              totalPnL += pnlUsd;
+              totalTrades++;
+              
+              console.log(`⚠️ [LIQUIDATE] ${pos.symbol} | ${decision.reason} | $${pnlUsd.toFixed(2)}`);
+              
+              const idx = positions.findIndex(p => p.id === pos.id);
+              if (idx > -1) positions.splice(idx, 1);
+            }
+          }
         }
         
-        // ========== 6. GENERATE NEW SIGNALS ==========
-        const signals = generateSignals(markets, regime, brainState, allocation);
-        brainState.lastSignals = signals;
-        
-        // ========== 7. EXECUTE BEST SIGNALS ==========
-        const maxNewTrades = Math.min(3, MASTER_CONFIG.maxOpenPositions - positions.length);
-        let tradesThisCycle = 0;
-        
-        for (const signal of signals) {
-          if (tradesThisCycle >= maxNewTrades) break;
-          if (signal.action !== 'buy') continue;
-          if (signal.suggestedSize < MASTER_CONFIG.minTradeSize) continue;
-          if (signal.suggestedSize > freeBalance) continue;
+        // ========== 4. ENTER NEW POSITIONS ==========
+        if (positions.length < MASTER_CONFIG.maxOpenPositions) {
+          const maxNew = Math.min(3, MASTER_CONFIG.maxOpenPositions - positions.length);
+          let entered = 0;
           
-          // Check single position limit
-          if (signal.suggestedSize > balance * MASTER_CONFIG.maxSinglePosition) {
-            signal.suggestedSize = balance * MASTER_CONFIG.maxSinglePosition;
-          }
-          
-          const market = markets.find(m => m.symbol === signal.symbol);
-          if (!market) continue;
-          
-          console.log(`\n🎯 [${signal.strategy.toUpperCase()}] ${signal.symbol}`);
-          console.log(`   ${signal.reason}`);
-          console.log(`   Entry: $${signal.entryPrice.toFixed(6)} | Target: $${signal.targetPrice.toFixed(6)} | Stop: $${signal.stopLoss.toFixed(6)}`);
-          
-          const result = await executeOrder(apiKey, apiSecret, signal.symbol, 'buy', signal.suggestedSize, market.price);
-          
-          if (result.success) {
-            const newPosition: Position = {
-              id: `${signal.symbol}-${Date.now()}`,
-              symbol: signal.symbol,
-              strategy: signal.strategy,
-              side: 'long',
-              entryPrice: result.avgPrice || market.price,
-              amount: result.filledAmount || (signal.suggestedSize / market.price),
-              usdValue: signal.suggestedSize,
-              stopLoss: signal.stopLoss,
-              takeProfit: signal.targetPrice,
-              timestamp: Date.now(),
-            };
+          for (const signal of signals) {
+            if (entered >= maxNew) break;
+            if (signal.suggestedSize < MASTER_CONFIG.minTradeSize) continue;
+            if (signal.suggestedSize > freeUsdt) continue;
             
-            positions.push(newPosition);
-            tradesThisCycle++;
+            const market = markets.find(m => m.symbol === signal.symbol);
+            if (!market) continue;
             
-            console.log(`   ✅ Filled @ $${newPosition.entryPrice.toFixed(6)} | Size: $${signal.suggestedSize.toFixed(2)}`);
+            const size = Math.min(signal.suggestedSize, totalBalance * MASTER_CONFIG.maxSinglePosition);
+            const buyAmount = (size / market.price).toFixed(6);
             
-            // Log to database
-            await supabase.from('trade_history').insert({
-              symbol: signal.symbol.replace('_', '/'),
-              type: signal.strategy,
-              side: 'buy',
-              amount: newPosition.amount,
-              price: newPosition.entryPrice,
-              expected_edge: ((signal.targetPrice - signal.entryPrice) / signal.entryPrice) * 100,
-              status: 'executed',
-              executed_at: new Date().toISOString(),
-            });
+            const result = await executeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyAmount);
+            
+            if (result.success) {
+              positions.push({
+                id: `${signal.symbol}-${Date.now()}`,
+                symbol: signal.symbol,
+                strategy: signal.strategy,
+                entryPrice: result.avgPrice || market.price,
+                amount: result.filledAmount || parseFloat(buyAmount),
+                usdValue: size,
+                currentValue: size,
+                pnlPercent: 0,
+                stopLoss: signal.stopLoss,
+                takeProfit: signal.targetPrice,
+                timestamp: Date.now(),
+              });
+              
+              entered++;
+              console.log(`🎯 [${signal.strategy.toUpperCase()}] ${signal.symbol} | ${signal.reason} | $${size.toFixed(2)}`);
+            }
           }
         }
         
-        // ========== 8. STATUS LOG ==========
+        // Status log
         if (cycleCount % 10 === 0) {
-          console.log(`\n📈 [STATUS] Cycle ${cycleCount} | ${regime.toUpperCase()} | Pos: ${positions.length} | Exp: ${exposurePercent.toFixed(1)}% | P&L: $${totalPnL.toFixed(2)}`);
+          console.log(`📈 [STATUS] Cycle ${cycleCount} | ${regime} | Pos: ${positions.length} | P&L: $${totalPnL.toFixed(2)} | Swaps: ${reallocations}`);
         }
         
-      } catch (cycleError) {
-        console.error(`❌ [ERROR] Cycle ${cycleCount}:`, cycleError);
+      } catch (e) {
+        console.error(`❌ [ERROR]`, e);
       }
       
-      // Wait for next decision
-      const elapsed = Date.now() - cycleStart;
-      const sleepTime = Math.max(MASTER_CONFIG.decisionInterval - elapsed, 100);
-      await new Promise(r => setTimeout(r, sleepTime));
+      await new Promise(r => setTimeout(r, MASTER_CONFIG.decisionInterval));
     }
 
-    // ========== FINAL SUMMARY ==========
-    console.log('\n' + '═'.repeat(60));
-    console.log('🧠 [MASTER BRAIN] Session Complete');
-    console.log('═'.repeat(60));
-    console.log(`Duration: ${durationSeconds}s | Cycles: ${cycleCount}`);
-    console.log(`Total Trades: ${totalTrades} | Total P&L: $${totalPnL.toFixed(2)}`);
-    console.log(`Open Positions: ${positions.length}`);
-    console.log('\nBy Strategy:');
-    for (const [strategy, stats] of Object.entries(strategyStats)) {
-      if (stats.trades > 0) {
-        console.log(`  ${strategy}: ${stats.trades} trades, $${stats.pnl.toFixed(2)} P&L`);
-      }
-    }
-    console.log('═'.repeat(60));
-
-    // Update system state
-    await supabase.from('trading_system_state').upsert({
-      id: 'master-brain',
-      is_active: true,
-      total_trades: totalTrades,
-      total_pnl: totalPnL,
-      last_heartbeat: new Date().toISOString(),
-      settings: { regime: lastRegime, positions: positions.length },
-    });
+    console.log(`\n${'═'.repeat(50)}`);
+    console.log(`🧠 [SUMMARY] Trades: ${totalTrades} | P&L: $${totalPnL.toFixed(2)} | Reallocations: ${reallocations} | Dust: $${dustConverted.toFixed(2)}`);
 
     return new Response(JSON.stringify({
       success: true,
-      cycles: cycleCount,
       totalTrades,
       totalPnL,
+      reallocations,
+      dustConverted,
       openPositions: positions.length,
-      strategyStats,
-      lastRegime,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
   } catch (error) {
-    console.error('🧠 [MASTER BRAIN] Fatal error:', error);
-    return new Response(JSON.stringify({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    }), {
+    console.error('🧠 [FATAL]', error);
+    return new Response(JSON.stringify({ success: false, error: error instanceof Error ? error.message : 'Unknown error' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
