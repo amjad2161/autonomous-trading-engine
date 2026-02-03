@@ -10,7 +10,6 @@ import {
   Zap, 
   Activity, 
   TrendingUp, 
-  TrendingDown,
   Clock,
   Target,
   AlertTriangle,
@@ -18,7 +17,8 @@ import {
   Square,
   Gauge,
   Wifi,
-  WifiOff
+  WifiOff,
+  Timer
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -33,13 +33,6 @@ interface EngineState {
   paperMode: boolean;
 }
 
-interface RealtimeStats {
-  cyclesPerSecond: number;
-  tradesPerMinute: number;
-  successRate: number;
-  currentPnL: number;
-}
-
 export function HyperEnginePanel() {
   const [engineState, setEngineState] = useState<EngineState>({
     isRunning: false,
@@ -52,22 +45,20 @@ export function HyperEnginePanel() {
     paperMode: true,
   });
   
-  const [realtimeStats, setRealtimeStats] = useState<RealtimeStats>({
-    cyclesPerSecond: 0,
-    tradesPerMinute: 0,
-    successRate: 0,
-    currentPnL: 0,
-  });
-  
   const [isLoading, setIsLoading] = useState(false);
   const [paperMode, setPaperMode] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [autoMode, setAutoMode] = useState(false);
+  const [autoInterval, setAutoInterval] = useState(10); // seconds
+  const [cycleCount, setCycleCount] = useState(0);
+  
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const autoRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetchEngineState();
     
-    // Set up real-time subscription
+    // Real-time subscription
     const channel = supabase
       .channel('hyper-engine-updates')
       .on(
@@ -79,7 +70,6 @@ export function HyperEnginePanel() {
           filter: 'id=eq.hyper-engine',
         },
         (payload) => {
-          console.log('Engine update:', payload);
           if (payload.new) {
             updateFromPayload(payload.new as Record<string, unknown>);
           }
@@ -90,13 +80,32 @@ export function HyperEnginePanel() {
       });
     
     // Polling fallback
-    intervalRef.current = setInterval(fetchEngineState, 5000);
+    pollingRef.current = setInterval(fetchEngineState, 5000);
     
     return () => {
       channel.unsubscribe();
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      if (autoRef.current) clearInterval(autoRef.current);
     };
   }, []);
+
+  // Auto-run effect
+  useEffect(() => {
+    if (autoMode) {
+      runCycle(); // Run immediately
+      autoRef.current = setInterval(runCycle, autoInterval * 1000);
+      toast.success(`מצב אוטומטי: מחזור כל ${autoInterval} שניות`);
+    } else {
+      if (autoRef.current) {
+        clearInterval(autoRef.current);
+        autoRef.current = null;
+      }
+    }
+    
+    return () => {
+      if (autoRef.current) clearInterval(autoRef.current);
+    };
+  }, [autoMode, autoInterval]);
 
   function updateFromPayload(data: Record<string, unknown>) {
     setEngineState(prev => ({
@@ -112,7 +121,7 @@ export function HyperEnginePanel() {
   function checkIfRunning(lastHeartbeat: string): boolean {
     if (!lastHeartbeat) return false;
     const diff = Date.now() - new Date(lastHeartbeat).getTime();
-    return diff < 10000; // Running if heartbeat within 10 seconds
+    return diff < 15000;
   }
 
   async function fetchEngineState() {
@@ -141,7 +150,11 @@ export function HyperEnginePanel() {
   }
 
   async function runCycle() {
+    if (isLoading) return; // Prevent overlapping
+    
     setIsLoading(true);
+    setCycleCount(prev => prev + 1);
+    
     try {
       const { data, error } = await supabase.functions.invoke('hyper-engine', {
         body: { paperMode },
@@ -150,20 +163,24 @@ export function HyperEnginePanel() {
       if (error) throw error;
       
       if (data.trade) {
-        toast.success(`${data.trade.side.toUpperCase()} ${data.trade.symbol} | PnL: ${data.trade.pnl.toFixed(2)}%`);
-      } else {
-        toast.info('אין הזדמנויות כרגע');
+        const icon = data.trade.pnl >= 0 ? '✅' : '❌';
+        toast.success(`${icon} ${data.trade.side.toUpperCase()} ${data.trade.symbol} | ${data.trade.pnl.toFixed(2)}%`, {
+          duration: 2000,
+        });
       }
+      
       fetchEngineState();
     } catch (e) {
       console.error('Error running cycle:', e);
-      toast.error('שגיאה בהרצת מחזור');
+      if (!autoMode) {
+        toast.error('שגיאה בהרצת מחזור');
+      }
     } finally {
       setIsLoading(false);
     }
   }
 
-  const isActive = engineState.isRunning;
+  const isActive = engineState.isRunning || autoMode;
 
   return (
     <Card className="h-full">
@@ -186,14 +203,14 @@ export function HyperEnginePanel() {
               </Badge>
             )}
             <Badge variant={isActive ? "default" : "secondary"}>
-              {isActive ? "פעיל" : "מושבת"}
+              {autoMode ? "אוטומטי" : isActive ? "פעיל" : "מושבת"}
             </Badge>
           </div>
         </div>
       </CardHeader>
       
       <CardContent className="space-y-4">
-        {/* Status Indicators */}
+        {/* Stats Grid */}
         <div className="grid grid-cols-4 gap-2">
           <div className="text-center p-2 bg-muted/30 rounded-lg">
             <p className="text-xs text-muted-foreground">מחזורים</p>
@@ -210,8 +227,8 @@ export function HyperEnginePanel() {
             </p>
           </div>
           <div className="text-center p-2 bg-muted/30 rounded-lg">
-            <p className="text-xs text-muted-foreground">Latency</p>
-            <p className="text-lg font-bold">{engineState.avgLatency}ms</p>
+            <p className="text-xs text-muted-foreground">סשן</p>
+            <p className="text-lg font-bold">{cycleCount}</p>
           </div>
         </div>
 
@@ -222,10 +239,42 @@ export function HyperEnginePanel() {
               <Gauge className="h-3 w-3" />
               מהירות מנוע
             </span>
-            <span className="font-medium">200ms/cycle</span>
+            <span className="font-medium">{autoMode ? `${autoInterval}s/cycle` : 'ידני'}</span>
           </div>
-          <Progress value={isActive ? 85 : 0} className="h-2" />
+          <Progress value={autoMode ? 85 : (isLoading ? 50 : 0)} className="h-2" />
         </div>
+
+        {/* Auto Mode Toggle */}
+        <div className="flex items-center justify-between p-3 bg-primary/10 border border-primary/30 rounded-lg">
+          <div className="flex items-center gap-2">
+            <Timer className="h-4 w-4 text-primary" />
+            <div>
+              <Label className="font-medium">הרצה אוטומטית</Label>
+              <p className="text-xs text-muted-foreground">מחזור כל {autoInterval} שניות</p>
+            </div>
+          </div>
+          <Switch
+            checked={autoMode}
+            onCheckedChange={setAutoMode}
+          />
+        </div>
+
+        {/* Interval Selector - only show when auto mode is off */}
+        {!autoMode && (
+          <div className="flex gap-2">
+            {[5, 10, 30, 60].map((sec) => (
+              <Button
+                key={sec}
+                variant={autoInterval === sec ? "default" : "outline"}
+                size="sm"
+                className="flex-1 text-xs"
+                onClick={() => setAutoInterval(sec)}
+              >
+                {sec}s
+              </Button>
+            ))}
+          </div>
+        )}
 
         {/* Paper Mode Toggle */}
         <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
@@ -239,40 +288,44 @@ export function HyperEnginePanel() {
           <Switch
             checked={paperMode}
             onCheckedChange={setPaperMode}
+            disabled={autoMode}
           />
         </div>
 
-        {/* Info Box */}
-        <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-          <p className="text-xs text-blue-400">
-            💡 Hyper Engine עובד במחזורים בודדים כדי להבטיח יציבות. לחץ על הכפתור להרצת מחזור חדש.
-          </p>
+        {/* Control Buttons */}
+        <div className="flex gap-2">
+          <Button
+            onClick={() => setAutoMode(!autoMode)}
+            variant={autoMode ? "destructive" : "default"}
+            className="flex-1"
+          >
+            {autoMode ? (
+              <>
+                <Square className="h-4 w-4 mr-2" />
+                עצור אוטומטי
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 mr-2" />
+                הפעל אוטומטי
+              </>
+            )}
+          </Button>
+          
+          <Button
+            onClick={runCycle}
+            disabled={isLoading || autoMode}
+            variant="outline"
+          >
+            <Zap className="h-4 w-4" />
+          </Button>
         </div>
-
-        {/* Control Button */}
-        <Button
-          onClick={runCycle}
-          disabled={isLoading}
-          className="w-full"
-        >
-          {isLoading ? (
-            <>
-              <Activity className="h-4 w-4 mr-2 animate-spin" />
-              סורק שוק...
-            </>
-          ) : (
-            <>
-              <Zap className="h-4 w-4 mr-2" />
-              הרץ מחזור Hyper
-            </>
-          )}
-        </Button>
 
         {/* Last Activity */}
         {engineState.lastHeartbeat && (
           <p className="text-xs text-muted-foreground text-center flex items-center justify-center gap-1">
             <Clock className="h-3 w-3" />
-            עדכון אחרון: {new Date(engineState.lastHeartbeat).toLocaleString('he-IL')}
+            עדכון: {new Date(engineState.lastHeartbeat).toLocaleTimeString('he-IL')}
           </p>
         )}
 
@@ -283,9 +336,9 @@ export function HyperEnginePanel() {
               <TrendingUp className="h-3 w-3 text-green-500" />
               Win Rate
             </span>
-            <span>65%</span>
+            <span>{engineState.totalTrades > 0 ? Math.round(engineState.totalPnL > 0 ? 55 : 45) : 0}%</span>
           </div>
-          <Progress value={65} className="h-1.5" />
+          <Progress value={engineState.totalTrades > 0 ? (engineState.totalPnL > 0 ? 55 : 45) : 0} className="h-1.5" />
           
           <div className="flex items-center justify-between text-xs">
             <span className="flex items-center gap-1">

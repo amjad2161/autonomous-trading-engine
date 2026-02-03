@@ -53,3 +53,6 @@ verify_jwt = false
 
 [functions.hyper-engine]
 verify_jwt = false
+
+[functions.update-secrets]
+verify_jwt = false
