@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.optimize-strategy]
 verify_jwt = false
+
+[functions.walk-forward]
+verify_jwt = false
