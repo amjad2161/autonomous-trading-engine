@@ -62,7 +62,6 @@ export function HyperEnginePanel() {
   const [isLoading, setIsLoading] = useState(false);
   const [paperMode, setPaperMode] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
-  const [sessionDuration, setSessionDuration] = useState(300);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -141,41 +140,24 @@ export function HyperEnginePanel() {
     }
   }
 
-  async function startEngine() {
+  async function runCycle() {
     setIsLoading(true);
     try {
-      toast.info('מפעיל Hyper Engine...', { duration: 2000 });
-      
       const { data, error } = await supabase.functions.invoke('hyper-engine', {
-        body: { 
-          durationSeconds: sessionDuration,
-          paperMode,
-        },
+        body: { paperMode },
       });
       
       if (error) throw error;
       
-      toast.success(`Engine completed: ${data.totalTrades} trades, ${data.totalPnL?.toFixed(2)}% PnL`);
+      if (data.trade) {
+        toast.success(`${data.trade.side.toUpperCase()} ${data.trade.symbol} | PnL: ${data.trade.pnl.toFixed(2)}%`);
+      } else {
+        toast.info('אין הזדמנויות כרגע');
+      }
       fetchEngineState();
     } catch (e) {
-      console.error('Error starting engine:', e);
-      toast.error('שגיאה בהפעלת המנוע');
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
-  async function triggerQuickCycle() {
-    setIsLoading(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('cron-trigger', {
-        body: { action: 'hyper' },
-      });
-      
-      if (error) throw error;
-      toast.success('מחזור מהיר הושלם');
-    } catch (e) {
-      toast.error('שגיאה במחזור');
+      console.error('Error running cycle:', e);
+      toast.error('שגיאה בהרצת מחזור');
     } finally {
       setIsLoading(false);
     }
@@ -260,53 +242,31 @@ export function HyperEnginePanel() {
           />
         </div>
 
-        {/* Duration Selector */}
-        <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">משך סשן (שניות)</Label>
-          <div className="flex gap-2">
-            {[60, 300, 600, 1800].map((duration) => (
-              <Button
-                key={duration}
-                variant={sessionDuration === duration ? "default" : "outline"}
-                size="sm"
-                className="flex-1 text-xs"
-                onClick={() => setSessionDuration(duration)}
-              >
-                {duration >= 60 ? `${duration / 60}m` : `${duration}s`}
-              </Button>
-            ))}
-          </div>
+        {/* Info Box */}
+        <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+          <p className="text-xs text-blue-400">
+            💡 Hyper Engine עובד במחזורים בודדים כדי להבטיח יציבות. לחץ על הכפתור להרצת מחזור חדש.
+          </p>
         </div>
 
-        {/* Control Buttons */}
-        <div className="flex gap-2">
-          <Button
-            onClick={startEngine}
-            disabled={isLoading || isActive}
-            className="flex-1"
-            variant={isActive ? "destructive" : "default"}
-          >
-            {isActive ? (
-              <>
-                <Square className="h-4 w-4 mr-2" />
-                פועל...
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4 mr-2" />
-                הפעל Hyper Engine
-              </>
-            )}
-          </Button>
-          
-          <Button
-            onClick={triggerQuickCycle}
-            disabled={isLoading}
-            variant="outline"
-          >
-            <Zap className="h-4 w-4" />
-          </Button>
-        </div>
+        {/* Control Button */}
+        <Button
+          onClick={runCycle}
+          disabled={isLoading}
+          className="w-full"
+        >
+          {isLoading ? (
+            <>
+              <Activity className="h-4 w-4 mr-2 animate-spin" />
+              סורק שוק...
+            </>
+          ) : (
+            <>
+              <Zap className="h-4 w-4 mr-2" />
+              הרץ מחזור Hyper
+            </>
+          )}
+        </Button>
 
         {/* Last Activity */}
         {engineState.lastHeartbeat && (
