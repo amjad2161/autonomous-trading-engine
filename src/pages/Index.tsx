@@ -12,12 +12,15 @@ import {
   TradingChatPanel,
   PerformanceDashboard,
   CronJobSetup,
-  TickScalpingPanel
+  TickScalpingPanel,
+  MasterControlPanel,
+  AdvancedAnalytics,
+  TradeHistoryTable
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Server, Zap } from "lucide-react";
+import { Server, Zap, Brain, BarChart3, Settings, FlaskConical } from "lucide-react";
 
 const Index = () => {
   const { isLoading, isServerMode } = useCredentials();
@@ -34,20 +37,29 @@ const Index = () => {
     );
   }
 
-  // Server mode - go directly to dashboard (no credentials screen needed)
   return (
     <DashboardLayout>
-      <Tabs defaultValue="dashboard" className="w-full">
-        <div className="flex items-center justify-between mb-4">
-          <TabsList>
+      <Tabs defaultValue="control" className="w-full">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <TabsList className="flex-wrap">
+            <TabsTrigger value="control" className="flex items-center gap-1">
+              <Settings className="h-3 w-3" />
+              בקרה
+            </TabsTrigger>
+            <TabsTrigger value="analytics" className="flex items-center gap-1">
+              <BarChart3 className="h-3 w-3" />
+              אנליטיקס
+            </TabsTrigger>
             <TabsTrigger value="dashboard">דשבורד</TabsTrigger>
             <TabsTrigger value="scalping" className="flex items-center gap-1">
               <Zap className="h-3 w-3" />
-              Tick Scalping
+              Scalping
             </TabsTrigger>
-            <TabsTrigger value="performance">ביצועים</TabsTrigger>
-            <TabsTrigger value="cron">Cron 24/7</TabsTrigger>
-            <TabsTrigger value="backtest">Backtesting</TabsTrigger>
+            <TabsTrigger value="history">היסטוריה</TabsTrigger>
+            <TabsTrigger value="backtest" className="flex items-center gap-1">
+              <FlaskConical className="h-3 w-3" />
+              Backtest
+            </TabsTrigger>
           </TabsList>
           
           {isServerMode && (
@@ -58,11 +70,45 @@ const Index = () => {
           )}
         </div>
         
-        <TabsContent value="dashboard" className="mt-0">
-          {/* Mobile: Single column, Tablet: 2 columns, Desktop: 4 columns */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 sm:gap-4 pb-4">
+        {/* Control Panel Tab */}
+        <TabsContent value="control" className="mt-0">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            {/* Master Control Panel */}
+            <div className="lg:col-span-4">
+              <MasterControlPanel />
+            </div>
             
-            {/* AI Chat Panel - PRIMARY */}
+            {/* Treasury */}
+            <div className="lg:col-span-4">
+              <TreasuryPanel />
+            </div>
+            
+            {/* Positions */}
+            <div className="lg:col-span-4">
+              <PositionsPanel />
+            </div>
+            
+            {/* AI Chat */}
+            <div className="lg:col-span-6 h-[400px]">
+              <TradingChatPanel />
+            </div>
+            
+            {/* Activity Log */}
+            <div className="lg:col-span-6 h-[400px]">
+              <ActivityLog />
+            </div>
+          </div>
+        </TabsContent>
+        
+        {/* Analytics Tab */}
+        <TabsContent value="analytics" className="mt-0">
+          <AdvancedAnalytics />
+        </TabsContent>
+        
+        {/* Dashboard Tab */}
+        <TabsContent value="dashboard" className="mt-0">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 sm:gap-4 pb-4">
+            {/* AI Chat Panel */}
             <div className="xl:col-span-4 h-auto min-h-[500px]">
               <TradingChatPanel />
             </div>
@@ -99,6 +145,7 @@ const Index = () => {
           </div>
         </TabsContent>
         
+        {/* Scalping Tab */}
         <TabsContent value="scalping" className="mt-0">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-12rem)]">
             <TickScalpingPanel />
@@ -109,18 +156,12 @@ const Index = () => {
           </div>
         </TabsContent>
         
-        <TabsContent value="performance" className="mt-0">
-          <div className="h-[calc(100vh-12rem)]">
-            <PerformanceDashboard />
-          </div>
+        {/* History Tab */}
+        <TabsContent value="history" className="mt-0">
+          <TradeHistoryTable />
         </TabsContent>
         
-        <TabsContent value="cron" className="mt-0">
-          <div className="h-[calc(100vh-12rem)] max-w-2xl">
-            <CronJobSetup />
-          </div>
-        </TabsContent>
-        
+        {/* Backtest Tab */}
         <TabsContent value="backtest" className="mt-0">
           <div className="h-[calc(100vh-12rem)]">
             <BacktestPanel />

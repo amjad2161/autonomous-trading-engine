@@ -22,17 +22,66 @@ const MASTER_CONFIG = {
   maxDailyLoss: -0.05,
   maxOpenPositions: 12,
   minTradeSize: 5,
-  // Dynamic reallocation settings
   reallocation: {
-    minEdgeImprovement: 0.5,   // New opportunity must be 0.5% better
-    dustThreshold: 1.0,        // Convert balances under $1 to USDT
-    minHoldTime: 30,           // Min 30 seconds before swap
-    forceLiquidateAt: -2.0,    // Force liquidate losing positions for better opportunities
-    opportunityCostWeight: 0.3, // How much to weight opportunity cost in decisions
+    minEdgeImprovement: 0.5,
+    dustThreshold: 1.0,
+    minHoldTime: 30,
+    forceLiquidateAt: -2.0,
+    opportunityCostWeight: 0.3,
   },
   decisionInterval: 500,
   staleDataThreshold: 5000,
 };
+
+// ============ PAPER TRADING MODE ============
+interface PaperState {
+  balance: number;
+  positions: Map<string, { amount: number; entryPrice: number }>;
+}
+
+interface SystemSettings {
+  paperMode: boolean;
+  allocations: Record<string, number>;
+  isActive: boolean;
+}
+
+async function getSystemSettings(supabase: ReturnType<typeof createClient>): Promise<SystemSettings> {
+  try {
+    const { data } = await supabase
+      .from('trading_system_state')
+      .select('*')
+      .eq('id', 'master-brain')
+      .maybeSingle();
+    
+    if (!data) {
+      return {
+        paperMode: false,
+        isActive: true,
+        allocations: { momentum: 0.3, whale: 0.25, grid: 0.2, dca: 0.25 },
+      };
+    }
+    
+    const record = data as unknown as { settings?: Record<string, unknown>; is_active?: boolean };
+    const settings = record.settings || {};
+    
+    return {
+      paperMode: Boolean(settings.paper_mode),
+      isActive: record.is_active !== false,
+      allocations: {
+        momentum: (settings.momentum_allocation as number) || 0.3,
+        whale: (settings.whale_allocation as number) || 0.25,
+        grid: (settings.grid_allocation as number) || 0.2,
+        dca: (settings.dca_allocation as number) || 0.25,
+      },
+    };
+  } catch {
+    return {
+      paperMode: false,
+      isActive: true,
+      allocations: { momentum: 0.3, whale: 0.25, grid: 0.2, dca: 0.25 },
+    };
+  }
+}
 
 // ============ TYPES ============
 type MarketRegime = 'trending' | 'ranging' | 'volatile' | 'crash' | 'pump';
