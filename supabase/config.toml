@@ -41,3 +41,6 @@ verify_jwt = false
 
 [functions.ultimate-trader]
 verify_jwt = false
+
+[functions.master-brain]
+verify_jwt = false
