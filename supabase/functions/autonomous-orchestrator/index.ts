@@ -13,59 +13,60 @@ const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ===================== CONFIGURATION =====================
+// 🎯 CAPITAL ACCUMULATION MODE - Start small, compound gains
 const CONFIG = {
-  // Module 1: Risk Governor
-  BASE_RISK: 0.012,
-  MIN_RISK: 0.008,
-  MAX_RISK: 0.016,
-  MAX_POSITIONS: 4,
-  MAX_PER_ASSET: 0.12,
-  MAX_EXPOSURE: 0.50,
-  DAILY_DD_DEFENSE: 0.03,
-  DAILY_DD_HALT: 0.05,
-  LOSS_CLUSTER_WINDOW_MS: 90 * 60 * 1000,
-  LOSS_SIZE_REDUCTION: 0.30,
+  // Module 1: Risk Governor - CONSERVATIVE for capital building
+  BASE_RISK: 0.006,       // 0.6% per trade (was 1.2%) - micro risk
+  MIN_RISK: 0.004,        // 0.4% minimum
+  MAX_RISK: 0.010,        // 1.0% max (was 1.6%)
+  MAX_POSITIONS: 3,       // Focus on fewer, quality trades
+  MAX_PER_ASSET: 0.08,    // 8% max per asset (was 12%)
+  MAX_EXPOSURE: 0.35,     // 35% total exposure (was 50%)
+  DAILY_DD_DEFENSE: 0.02, // Enter defense at -2% (was -3%)
+  DAILY_DD_HALT: 0.04,    // Halt at -4% (was -5%)
+  LOSS_CLUSTER_WINDOW_MS: 60 * 60 * 1000, // 1 hour (was 90 min)
+  LOSS_SIZE_REDUCTION: 0.40, // Reduce 40% after loss (was 30%)
   CONSECUTIVE_LOSS_THRESHOLD: 2,
   
-  // Module 3: Dynamic Universe
-  MIN_VOLUME: 500000,
-  MAX_SPREAD_NORMAL: 0.30,
-  MAX_SPREAD_HIGH_VOL: 0.35,
-  MAX_SLIPPAGE: 0.15,
-  WHITELIST_UPDATE_MS: 15 * 60 * 1000,
+  // Module 3: Dynamic Universe - STRICTER filters
+  MIN_VOLUME: 800000,     // Higher volume = better liquidity
+  MAX_SPREAD_NORMAL: 0.20, // Tighter spread (was 0.30%)
+  MAX_SPREAD_HIGH_VOL: 0.28,
+  MAX_SLIPPAGE: 0.10,     // Lower slippage tolerance
+  WHITELIST_UPDATE_MS: 10 * 60 * 1000, // More frequent updates
   
   // Module 4: Turbo Scanner
-  SCAN_INTERVAL_MS: 4000,
-  IDLE_THRESHOLD_MS: 7 * 60 * 1000,
+  SCAN_INTERVAL_MS: 3000, // Faster scanning
+  IDLE_THRESHOLD_MS: 5 * 60 * 1000,
   
-  // Module 5: Signal Validation
-  MIN_REWARD_RISK: 2.2,
-  MAX_FEE_SLIPPAGE_RATIO: 0.18,
+  // Module 5: Signal Validation - HIGHER quality bar
+  MIN_REWARD_RISK: 2.5,   // Require R:R >= 2.5 (was 2.2)
+  MAX_FEE_SLIPPAGE_RATIO: 0.15, // Stricter (was 0.18)
   
   // Module 6: Execution
-  LIMIT_TTL_MS: 4000,
+  LIMIT_TTL_MS: 3000,     // Faster TTL
   
-  // Module 9: Risk Immunity
-  STOP_LOSS_MIN: 0.020,
-  STOP_LOSS_MAX: 0.028,
-  TRAILING_ACTIVATION: 0.035,
-  TRAILING_MIN: 0.020,
-  TRAILING_MAX: 0.032,
+  // Module 9: Risk Immunity - TIGHTER stops
+  STOP_LOSS_MIN: 0.015,   // 1.5% min stop (was 2%)
+  STOP_LOSS_MAX: 0.022,   // 2.2% max stop (was 2.8%)
+  TRAILING_ACTIVATION: 0.025, // Trail activates at +2.5% (was 3.5%)
+  TRAILING_MIN: 0.015,
+  TRAILING_MAX: 0.025,
   
-  // Module 10: Profit Extraction
-  TP1_PERCENT: 0.055,
-  TP1_SIZE: 0.35,
-  TP2_PERCENT: 0.095,
-  TP2_SIZE: 0.25,
-  ADDON_THRESHOLD: 0.06,
-  ADDON_SIZE: 0.20,
+  // Module 10: Profit Extraction - FASTER profit taking
+  TP1_PERCENT: 0.030,     // Take profit at +3% (was 5.5%)
+  TP1_SIZE: 0.40,         // Take 40% at TP1
+  TP2_PERCENT: 0.055,     // TP2 at +5.5% (was 9.5%)
+  TP2_SIZE: 0.35,         // Take 35% at TP2
+  ADDON_THRESHOLD: 0.08,  // Only add at +8% (was 6%)
+  ADDON_SIZE: 0.15,       // Smaller add-on (was 20%)
   
   // Module 12: Circuit Breakers
-  MAX_API_FAILURES: 3,
-  DEFENSE_TOP_PAIRS: 10,
+  MAX_API_FAILURES: 2,    // More cautious
+  DEFENSE_TOP_PAIRS: 5,   // Focus on top 5 in defense
   
   // Module 14: Auto-Pruning
-  PRUNE_BOTTOM_PERCENT: 0.20,
+  PRUNE_BOTTOM_PERCENT: 0.25, // Prune more aggressively
 };
 
 // ===================== TYPES =====================
