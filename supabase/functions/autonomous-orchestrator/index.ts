@@ -15,54 +15,61 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ===================== CONFIGURATION =====================
 const CONFIG = {
-  // Layer 1: Scanner
+  // Layer 1: Session Filter
+  HIGH_LIQUIDITY_HOURS: [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20], // London + NY overlap (UTC)
+  OFF_HOURS_FREQUENCY_REDUCTION: 0.6, // 40% less trades
+  
+  // Layer 2: Dynamic Universe
+  MIN_VOLUME: 500000,
+  MAX_SPREAD_NORMAL: 0.30,
+  MAX_SPREAD_HIGH_VOL: 0.35,
+  MAX_SLIPPAGE: 0.15,
+  WHITELIST_UPDATE_MINUTES: 30,
+  
+  // Layer 3: Scanner
   SCAN_INTERVAL_MS: 5000,
-  MIN_VOLUME: 500000,        // Higher volume requirement
-  MAX_SPREAD: 0.30,          // Max 0.30% spread
+  IDLE_CAPITAL_THRESHOLD_MS: 7 * 60 * 1000, // 7 minutes
   
-  // Layer 3: Capital Deployment
-  BASE_RISK_PER_TRADE: 0.012,    // 1.2% base risk
-  AGGRESSIVE_RISK: 0.016,         // 1.6% aggressive mode
-  MAX_PER_ASSET: 0.12,            // 12% max per asset
-  MAX_SIMULTANEOUS_POSITIONS: 4,
-  MAX_TOTAL_EXPOSURE: 0.50,       // 50% max exposure
+  // Layer 4: Entry Engine
+  MIN_REWARD_RISK: 2.2,
   
-  // Layer 4: Risk Control
-  STOP_LOSS_MIN: 0.020,      // 2.0% minimum stop
-  STOP_LOSS_MAX: 0.028,      // 2.8% maximum stop
-  TRAILING_ACTIVATION: 0.035, // Activate trailing at +3.5%
-  TRAILING_DISTANCE_MIN: 0.020,
-  TRAILING_DISTANCE_MAX: 0.032,
+  // Layer 5: Execution
+  MAX_FEE_SLIPPAGE_RATIO: 0.18, // 18% of profit target
   
-  // Layer 5: Profit Extraction
-  TP1_PERCENT: 0.05,         // First TP at +5%
-  TP1_SIZE: 0.35,            // Sell 35%
-  TP2_PERCENT: 0.09,         // Second TP at +9%
-  TP2_SIZE: 0.25,            // Sell 25%
+  // Layer 6: Position Sizing
+  BASE_RISK_PER_TRADE: 0.012,
+  AGGRESSIVE_RISK: 0.016,
+  MAX_PER_ASSET: 0.12,
+  MAX_POSITIONS: 4,
+  MAX_EXPOSURE: 0.50,
+  LOSS_SIZE_REDUCTION: 0.30,
+  LOSS_WINDOW_MS: 90 * 60 * 1000, // 90 minutes
   
-  // Layer 7: Loss Containment
-  DAILY_DRAWDOWN_CAUTION: 0.03,  // -3% → Defense Mode
-  DAILY_DRAWDOWN_HALT: 0.05,     // -5% → HARD STOP
-  MIN_WIN_RATE: 0.35,            // 35% minimum win rate
+  // Layer 7: Risk Control
+  STOP_LOSS_MIN: 0.020,
+  STOP_LOSS_MAX: 0.028,
+  TRAILING_ACTIVATION: 0.035,
+  TRAILING_MIN: 0.020,
+  TRAILING_MAX: 0.032,
+  
+  // Layer 8: Profit Extraction
+  TP1_RANGE: [0.05, 0.06],
+  TP1_SIZE: 0.35,
+  TP2_RANGE: [0.08, 0.11],
+  TP2_SIZE: 0.25,
+  ADDON_THRESHOLD: 0.06,
+  ADDON_SIZE: 0.20,
+  
+  // Layer 10: Circuit Breakers
   CONSECUTIVE_LOSS_THRESHOLD: 2,
+  DAILY_DRAWDOWN_DEFENSE: 0.03,
+  DAILY_DRAWDOWN_HALT: 0.05,
+  DEFENSE_TOP_PAIRS: 10,
 };
 
 // ===================== TYPES =====================
-interface Position {
-  symbol: string;
-  currency: string;
-  entryPrice: number;
-  amount: number;
-  value: number;
-  currentPrice: number;
-  pnlPercent: number;
-  stopLoss: number;
-  trailingStop?: number;
-  trailingActivated: boolean;
-  tp1Hit: boolean;
-  tp2Hit: boolean;
-  entryTime: number;
-}
+type MarketRegime = 'TREND_CONTINUATION' | 'BREAKOUT_EXPANSION' | 'RANGE_MEAN_REVERSION' | 'DISTRIBUTION_EXHAUSTION' | 'PANIC_LIQUIDITY_EVENT';
+type LossReason = 'BAD_TIMING' | 'SLIPPAGE' | 'STOP_HUNT' | 'REGIME_CHANGE' | 'OVEREXTENDED_ENTRY' | 'VOLUME_FAKE' | 'UNKNOWN';
 
 interface MarketData {
   pair: string;
@@ -76,18 +83,41 @@ interface MarketData {
   change24h: number;
   high24h: number;
   low24h: number;
-  volumeAcceleration: number;
-  orderBookImbalance: number;
-  momentum1m: number;
-  momentum5m: number;
   atr: number;
   volatility: number;
+  vwapRelation: number;
+  volumeImpulse: number;
+  trendAlignment: number;
+  orderBookImbalance: number;
   score: number;
+  regime: MarketRegime;
+}
+
+interface Position {
+  symbol: string;
+  currency: string;
+  entryPrice: number;
+  amount: number;
+  originalAmount: number;
+  value: number;
+  currentPrice: number;
+  pnlPercent: number;
+  stopLoss: number;
+  trailingStop?: number;
+  trailingActivated: boolean;
+  tp1Hit: boolean;
+  tp2Hit: boolean;
+  addOnExecuted: boolean;
+  entryTime: number;
+  regime: MarketRegime;
 }
 
 interface SystemState {
   mode: 'normal' | 'aggressive' | 'defense' | 'halted';
+  regime: MarketRegime;
+  isHighLiquiditySession: boolean;
   consecutiveLosses: number;
+  recentLossTime?: number;
   dailyPnL: number;
   dailyPnLPercent: number;
   startingBalance: number;
@@ -97,10 +127,12 @@ interface SystemState {
   riskMultiplier: number;
   winRate: number;
   totalTrades: number;
-  winningTrades: number;
+  lastTradeTime: number;
+  capitalIdleTime: number;
+  whitelistedPairs: string[];
 }
 
-// ===================== GATE.IO API HELPERS =====================
+// ===================== GATE.IO API =====================
 async function sha512Hash(message: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(message);
   const hashBuffer = await crypto.subtle.digest('SHA-512', msgBuffer);
@@ -133,10 +165,9 @@ async function gateRequest(endpoint: string, method: 'GET' | 'POST' | 'DELETE' =
   return response.json();
 }
 
-// ===================== LOGGING & STATE =====================
+// ===================== LOGGING =====================
 async function log(level: string, component: string, message: string, details?: unknown) {
-  const logLine = `[${component}] ${message}`;
-  console.log(logLine);
+  console.log(`[${component}] ${message}`);
   await supabase.from('system_log').insert({ level, component, message, details });
 }
 
@@ -183,82 +214,135 @@ async function recordTrade(trade: {
   });
 }
 
-// ===================== LAYER 1: MARKET SCANNER =====================
-async function scanMarkets(): Promise<MarketData[]> {
+// ===================== LAYER 1: SESSION FILTER =====================
+function isHighLiquiditySession(): boolean {
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  return CONFIG.HIGH_LIQUIDITY_HOURS.includes(utcHour);
+}
+
+// ===================== LAYER 2: REGIME DETECTION =====================
+function detectMarketRegime(market: MarketData): MarketRegime {
+  const { change24h, volatility, volume, atr, trendAlignment } = market;
+  
+  // PANIC: Extreme volatility + high volume + large negative move
+  if (volatility > 8 && change24h < -10) {
+    return 'PANIC_LIQUIDITY_EVENT';
+  }
+  
+  // DISTRIBUTION: High volume but price stalling near highs
+  const distFromHigh = (market.high24h - market.last) / market.high24h;
+  if (distFromHigh < 0.03 && volatility > 4 && change24h < 3) {
+    return 'DISTRIBUTION_EXHAUSTION';
+  }
+  
+  // BREAKOUT: Near high with strong momentum and volume
+  if (distFromHigh < 0.02 && change24h > 5 && volume > 1000000) {
+    return 'BREAKOUT_EXPANSION';
+  }
+  
+  // RANGE: Low volatility, oscillating
+  if (volatility < 2 && Math.abs(change24h) < 3) {
+    return 'RANGE_MEAN_REVERSION';
+  }
+  
+  // TREND: Aligned momentum with volume
+  if (trendAlignment > 0.7 && change24h > 3) {
+    return 'TREND_CONTINUATION';
+  }
+  
+  return 'RANGE_MEAN_REVERSION';
+}
+
+// ===================== LAYER 3: DYNAMIC UNIVERSE =====================
+async function buildWhitelist(tickers: any[], highVolatility: boolean): Promise<string[]> {
+  const maxSpread = highVolatility ? CONFIG.MAX_SPREAD_HIGH_VOL : CONFIG.MAX_SPREAD_NORMAL;
+  
+  const candidates = tickers
+    .filter(t => {
+      if (!t.currency_pair.endsWith('_USDT')) return false;
+      const volume = parseFloat(t.quote_volume);
+      if (volume < CONFIG.MIN_VOLUME) return false;
+      
+      const last = parseFloat(t.last);
+      const bid = parseFloat(t.highest_bid);
+      const ask = parseFloat(t.lowest_ask);
+      const spread = ((ask - bid) / last) * 100;
+      if (spread > maxSpread) return false;
+      
+      // Reject abnormal wick behavior
+      const high = parseFloat(t.high_24h);
+      const low = parseFloat(t.low_24h);
+      const wickRatio = (high - low) / last;
+      if (wickRatio > 0.5) return false; // 50% range is abnormal
+      
+      return true;
+    })
+    .sort((a, b) => parseFloat(b.quote_volume) - parseFloat(a.quote_volume))
+    .slice(0, 100);
+  
+  return candidates.map(c => c.currency_pair);
+}
+
+// ===================== LAYER 4: MARKET SCANNER =====================
+async function scanMarkets(whitelist: string[], highVolatility: boolean): Promise<MarketData[]> {
   const tickers = await gateRequest('/spot/tickers');
   const markets: MarketData[] = [];
   
   for (const ticker of tickers) {
-    if (!ticker.currency_pair.endsWith('_USDT')) continue;
-    
-    const volume = parseFloat(ticker.quote_volume);
-    if (volume < CONFIG.MIN_VOLUME) continue;
+    if (!whitelist.includes(ticker.currency_pair)) continue;
     
     const last = parseFloat(ticker.last);
     const bid = parseFloat(ticker.highest_bid);
     const ask = parseFloat(ticker.lowest_ask);
     const spread = ((ask - bid) / last) * 100;
-    
-    // Reject: thin liquidity, high spread
-    if (spread > CONFIG.MAX_SPREAD) continue;
-    
+    const volume = parseFloat(ticker.quote_volume);
     const high24h = parseFloat(ticker.high_24h);
     const low24h = parseFloat(ticker.low_24h);
     const change24h = parseFloat(ticker.change_percentage);
     
-    // Calculate ATR proxy (24h range)
     const atr = ((high24h - low24h) / last) * 100;
-    const volatility = atr / 24; // Hourly volatility proxy
+    const volatility = atr / 24;
     
-    // Volume acceleration (rough estimate - current vs average)
-    const avgDailyVolume = volume; // Would need historical data for real comparison
-    const volumeAcceleration = 1.0; // Placeholder - needs OHLCV data
+    // Simplified VWAP relation (above/below average)
+    const midPrice = (high24h + low24h) / 2;
+    const vwapRelation = (last - midPrice) / midPrice;
     
-    // Momentum alignment (simplified)
-    const momentum1m = change24h > 0 ? 1 : -1;
-    const momentum5m = change24h > 0 ? 1 : -1;
+    // Volume impulse (simplified - would need historical)
+    const volumeImpulse = volume > 1000000 ? 1.5 : 1.0;
     
-    // Order book imbalance (placeholder - needs order book data)
-    const orderBookImbalance = 0;
+    // Trend alignment (simplified)
+    const trendAlignment = change24h > 0 ? Math.min(change24h / 10, 1) : 0;
     
-    // Composite score for ranking
+    // Composite score
     const score = (
-      (volumeAcceleration * 20) +
-      (volatility * 10) +
+      volumeImpulse * 25 +
       (1 - spread) * 30 +
-      (orderBookImbalance * 20) +
-      ((momentum1m === momentum5m ? 1 : 0) * 20)
+      trendAlignment * 25 +
+      (volatility > 1 && volatility < 5 ? 20 : 10)
     );
     
-    markets.push({
+    const market: MarketData = {
       pair: ticker.currency_pair,
       currency: ticker.currency_pair.split('_')[0],
-      last,
-      bid,
-      ask,
-      spread,
-      volume,
-      change1h: change24h / 24, // Estimate
-      change24h,
-      high24h,
-      low24h,
-      volumeAcceleration,
-      orderBookImbalance,
-      momentum1m,
-      momentum5m,
-      atr,
-      volatility,
+      last, bid, ask, spread, volume,
+      change1h: change24h / 24,
+      change24h, high24h, low24h, atr, volatility,
+      vwapRelation, volumeImpulse, trendAlignment,
+      orderBookImbalance: 0,
       score,
-    });
+      regime: 'RANGE_MEAN_REVERSION',
+    };
+    
+    market.regime = detectMarketRegime(market);
+    markets.push(market);
   }
   
-  // Rank by score
   markets.sort((a, b) => b.score - a.score);
-  
   return markets;
 }
 
-// ===================== LAYER 2: ENTRY ENGINE =====================
+// ===================== LAYER 5: ENTRY ENGINE =====================
 interface EntrySignal {
   pair: string;
   currency: string;
@@ -269,65 +353,97 @@ interface EntrySignal {
   rewardRisk: number;
   stopLoss: number;
   confidence: number;
+  regime: MarketRegime;
+  slippageBudget: number;
 }
 
 function analyzeEntrySignals(markets: MarketData[], state: SystemState): EntrySignal[] {
   const signals: EntrySignal[] = [];
   
-  for (const market of markets) {
+  // In defense mode, only top pairs
+  const eligibleMarkets = state.mode === 'defense' 
+    ? markets.slice(0, CONFIG.DEFENSE_TOP_PAIRS)
+    : markets;
+  
+  for (const market of eligibleMarkets) {
     // Skip if already holding
     if (state.positions.some(p => p.currency === market.currency)) continue;
     
-    // Skip if at max positions
-    if (state.positions.length >= CONFIG.MAX_SIMULTANEOUS_POSITIONS) break;
+    // Skip if at max positions (reduced in defense)
+    const maxPos = state.mode === 'defense' ? Math.floor(CONFIG.MAX_POSITIONS / 2) : CONFIG.MAX_POSITIONS;
+    if (state.positions.length >= maxPos) break;
     
-    // Calculate dynamic stop loss based on volatility
-    const stopLossPercent = Math.min(
+    // Skip PANIC regime
+    if (market.regime === 'PANIC_LIQUIDITY_EVENT') continue;
+    
+    // Skip DISTRIBUTION unless very strong signal
+    if (market.regime === 'DISTRIBUTION_EXHAUSTION' && market.score < 70) continue;
+    
+    // Dynamic stop loss based on volatility
+    const stopPercent = Math.min(
       Math.max(market.volatility * 2, CONFIG.STOP_LOSS_MIN * 100),
       CONFIG.STOP_LOSS_MAX * 100
     ) / 100;
+    const stopLoss = market.last * (1 - stopPercent);
     
-    const stopLoss = market.last * (1 - stopLossPercent);
-    
-    // Entry conditions
     let reason = '';
     let expectedReturn = 0;
     let confidence = 0;
     
-    // Breakout: Near 24h high with momentum
-    const distanceFromHigh = (market.high24h - market.last) / market.high24h;
-    if (distanceFromHigh < 0.01 && market.change24h > 3 && market.change24h < 15) {
-      reason = 'breakout_continuation';
-      expectedReturn = 0.05; // 5% target
-      confidence = 70 + (market.volume / 1000000);
-    }
-    
-    // Bounce: Near 24h low with reversal signs
-    const distanceFromLow = (market.last - market.low24h) / market.low24h;
-    if (!reason && distanceFromLow < 0.03 && market.change24h > -8 && market.change24h < 0) {
-      reason = 'support_bounce';
-      expectedReturn = 0.04;
-      confidence = 65 + (market.volume / 1000000);
-    }
-    
-    // Momentum continuation: Strong trend with pullback
-    if (!reason && market.change24h > 5 && market.change24h < 20 && market.spread < 0.15) {
-      reason = 'momentum_continuation';
-      expectedReturn = 0.06;
-      confidence = 60 + (market.volume / 500000);
+    // REGIME-SPECIFIC ENTRY LOGIC
+    switch (market.regime) {
+      case 'TREND_CONTINUATION':
+        // Prefer pullback entries in trend
+        if (market.change24h > 3 && market.change24h < 15 && market.vwapRelation > 0) {
+          reason = 'trend_continuation';
+          expectedReturn = 0.06;
+          confidence = 75 + market.trendAlignment * 15;
+        }
+        break;
+        
+      case 'BREAKOUT_EXPANSION':
+        // Fast entry on confirmed breakout
+        const distFromHigh = (market.high24h - market.last) / market.high24h;
+        if (distFromHigh < 0.01 && market.volume > 800000) {
+          reason = 'breakout_expansion';
+          expectedReturn = 0.05;
+          confidence = 70 + (market.volume / 2000000) * 10;
+        }
+        break;
+        
+      case 'RANGE_MEAN_REVERSION':
+        // Small scalps near support
+        const distFromLow = (market.last - market.low24h) / market.low24h;
+        if (distFromLow < 0.03 && market.change24h > -5) {
+          reason = 'range_scalp';
+          expectedReturn = 0.03;
+          confidence = 65 + (market.spread < 0.15 ? 10 : 0);
+        }
+        break;
     }
     
     if (!reason) continue;
     
-    // Calculate reward/risk
-    const risk = stopLossPercent;
+    // Calculate R:R
+    const risk = stopPercent;
     const rewardRisk = expectedReturn / risk;
     
-    // Only accept R:R >= 2:1
-    if (rewardRisk < 2) continue;
+    // Layer 4: Must have R:R >= 2.2 after fees
+    const fees = 0.004; // 0.4% round trip
+    const netReturn = expectedReturn - fees;
+    const netRR = netReturn / risk;
+    if (netRR < CONFIG.MIN_REWARD_RISK) continue;
     
-    // Don't chase extended candles
+    // Layer 5: Slippage budget check
+    const estimatedSlippage = market.spread / 100;
+    const slippageBudget = (fees + estimatedSlippage) / expectedReturn;
+    if (slippageBudget > CONFIG.MAX_FEE_SLIPPAGE_RATIO) continue;
+    
+    // Reject extended entries (late entries)
     if (market.change24h > 20) continue;
+    
+    // VWAP filter for longs
+    if (market.vwapRelation < -0.05) continue; // Too far below VWAP
     
     signals.push({
       pair: market.pair,
@@ -336,103 +452,109 @@ function analyzeEntrySignals(markets: MarketData[], state: SystemState): EntrySi
       reason,
       expectedReturn,
       risk,
-      rewardRisk,
+      rewardRisk: netRR,
       stopLoss,
       confidence: Math.min(confidence, 95),
+      regime: market.regime,
+      slippageBudget,
     });
   }
   
-  // Sort by confidence * R:R
   signals.sort((a, b) => (b.confidence * b.rewardRisk) - (a.confidence * a.rewardRisk));
-  
   return signals;
 }
 
-// ===================== LAYER 3: CAPITAL DEPLOYMENT =====================
+// ===================== LAYER 6: POSITION SIZING =====================
 function calculatePositionSize(signal: EntrySignal, state: SystemState): number {
-  // Base risk
   let riskPercent = CONFIG.BASE_RISK_PER_TRADE;
   
-  // Aggressive mode in strong trend regime
-  if (state.mode === 'aggressive' && signal.confidence > 80) {
+  // Aggressive mode in strong trend
+  if (state.mode === 'aggressive' && signal.regime === 'TREND_CONTINUATION') {
     riskPercent = CONFIG.AGGRESSIVE_RISK;
   }
   
   // Reduce after consecutive losses
   if (state.consecutiveLosses >= CONFIG.CONSECUTIVE_LOSS_THRESHOLD) {
-    riskPercent *= 0.7; // Reduce by 30%
+    riskPercent *= (1 - CONFIG.LOSS_SIZE_REDUCTION);
   }
   
   // Defense mode reduction
   if (state.mode === 'defense') {
-    riskPercent *= 0.6; // Reduce by 40%
+    riskPercent *= 0.6;
   }
   
-  // Apply risk multiplier
-  riskPercent *= state.riskMultiplier;
+  // Off-hours reduction
+  if (!state.isHighLiquiditySession) {
+    riskPercent *= CONFIG.OFF_HOURS_FREQUENCY_REDUCTION;
+  }
   
-  // Calculate position size based on risk
   const riskAmount = state.currentBalance * riskPercent;
   const positionSize = riskAmount / signal.risk;
   
-  // Apply limits
+  // Limits
   const maxPerAsset = state.currentBalance * CONFIG.MAX_PER_ASSET;
-  const maxExposure = state.currentBalance * CONFIG.MAX_TOTAL_EXPOSURE - state.totalExposure;
+  const maxExposure = state.currentBalance * CONFIG.MAX_EXPOSURE - state.totalExposure;
   
   return Math.min(positionSize, maxPerAsset, maxExposure, state.currentBalance * 0.2);
 }
 
-// ===================== LAYER 4: RISK CONTROL SYSTEM =====================
-function calculateStopLoss(entryPrice: number, volatility: number): number {
-  const stopPercent = Math.min(
-    Math.max(volatility * 2, CONFIG.STOP_LOSS_MIN * 100),
-    CONFIG.STOP_LOSS_MAX * 100
-  ) / 100;
-  return entryPrice * (1 - stopPercent);
-}
-
-function calculateTrailingStop(position: Position, currentPrice: number): number | undefined {
+// ===================== LAYER 7: RISK CONTROL =====================
+function calculateTrailingStop(position: Position, currentPrice: number, volatility: number): number | undefined {
   const pnlPercent = (currentPrice - position.entryPrice) / position.entryPrice;
   
-  // Activate trailing at +3.5%
   if (pnlPercent >= CONFIG.TRAILING_ACTIVATION) {
-    // Calculate trailing distance based on volatility (simplified)
-    const trailingDistance = (CONFIG.TRAILING_DISTANCE_MIN + CONFIG.TRAILING_DISTANCE_MAX) / 2;
-    const newTrailingStop = currentPrice * (1 - trailingDistance);
+    // Volatility-weighted trailing distance
+    const trailingDist = Math.min(
+      Math.max(volatility * 0.02, CONFIG.TRAILING_MIN),
+      CONFIG.TRAILING_MAX
+    );
+    const newTrailing = currentPrice * (1 - trailingDist);
     
-    // Trailing can only tighten (move up)
-    if (!position.trailingStop || newTrailingStop > position.trailingStop) {
-      return newTrailingStop;
+    // Only tighten, never loosen
+    if (!position.trailingStop || newTrailing > position.trailingStop) {
+      return newTrailing;
     }
-    return position.trailingStop;
   }
-  
   return position.trailingStop;
 }
 
-// ===================== LAYER 5: PROFIT EXTRACTION =====================
+// ===================== LAYER 8: EXITS & PROFIT EXTRACTION =====================
 interface ExitAction {
   symbol: string;
   currency: string;
   amount: number;
   price: number;
-  reason: 'stop_loss' | 'trailing_stop' | 'tp1' | 'tp2' | 'hard_stop';
+  reason: 'stop_loss' | 'trailing_stop' | 'tp1' | 'tp2' | 'regime_exit' | 'panic_exit';
   pnlPercent: number;
 }
 
-function determineExits(positions: Position[], currentPrices: Map<string, number>): ExitAction[] {
+function determineExits(positions: Position[], markets: Map<string, MarketData>): ExitAction[] {
   const exits: ExitAction[] = [];
   
   for (const pos of positions) {
-    const currentPrice = currentPrices.get(pos.symbol) || pos.currentPrice;
+    const market = markets.get(pos.symbol);
+    const currentPrice = market?.last || pos.currentPrice;
     const pnlPercent = (currentPrice - pos.entryPrice) / pos.entryPrice;
+    
+    // PANIC regime - exit immediately
+    if (market?.regime === 'PANIC_LIQUIDITY_EVENT') {
+      exits.push({
+        symbol: pos.symbol,
+        currency: pos.currency,
+        amount: pos.amount,
+        price: currentPrice,
+        reason: 'panic_exit',
+        pnlPercent,
+      });
+      continue;
+    }
     
     // Hard Stop Loss
     if (currentPrice <= pos.stopLoss) {
       exits.push({
         symbol: pos.symbol,
         currency: pos.currency,
-        amount: pos.amount, // Sell all
+        amount: pos.amount,
         price: currentPrice,
         reason: 'stop_loss',
         pnlPercent,
@@ -445,7 +567,7 @@ function determineExits(positions: Position[], currentPrices: Map<string, number
       exits.push({
         symbol: pos.symbol,
         currency: pos.currency,
-        amount: pos.amount, // Sell all
+        amount: pos.amount,
         price: currentPrice,
         reason: 'trailing_stop',
         pnlPercent,
@@ -453,29 +575,38 @@ function determineExits(positions: Position[], currentPrices: Map<string, number
       continue;
     }
     
-    // TP1: Sell 35% at +5%
-    if (!pos.tp1Hit && pnlPercent >= CONFIG.TP1_PERCENT) {
-      const tp1Amount = pos.amount * CONFIG.TP1_SIZE;
+    // TP1: Take 35% at +5% to +6%
+    if (!pos.tp1Hit && pnlPercent >= CONFIG.TP1_RANGE[0]) {
       exits.push({
         symbol: pos.symbol,
         currency: pos.currency,
-        amount: tp1Amount,
+        amount: pos.originalAmount * CONFIG.TP1_SIZE,
         price: currentPrice,
         reason: 'tp1',
         pnlPercent,
       });
     }
     
-    // TP2: Sell 25% at +9%
-    if (!pos.tp2Hit && pos.tp1Hit && pnlPercent >= CONFIG.TP2_PERCENT) {
-      const remainingAmount = pos.amount * (1 - CONFIG.TP1_SIZE);
-      const tp2Amount = remainingAmount * (CONFIG.TP2_SIZE / (1 - CONFIG.TP1_SIZE));
+    // TP2: Take 25% at +8% to +11%
+    if (!pos.tp2Hit && pos.tp1Hit && pnlPercent >= CONFIG.TP2_RANGE[0]) {
       exits.push({
         symbol: pos.symbol,
         currency: pos.currency,
-        amount: tp2Amount,
+        amount: pos.originalAmount * CONFIG.TP2_SIZE,
         price: currentPrice,
         reason: 'tp2',
+        pnlPercent,
+      });
+    }
+    
+    // Regime change exit (was trend, now distribution)
+    if (pos.regime === 'TREND_CONTINUATION' && market?.regime === 'DISTRIBUTION_EXHAUSTION' && pnlPercent > 0.02) {
+      exits.push({
+        symbol: pos.symbol,
+        currency: pos.currency,
+        amount: pos.amount * 0.5, // Exit half
+        price: currentPrice,
+        reason: 'regime_exit',
         pnlPercent,
       });
     }
@@ -484,29 +615,66 @@ function determineExits(positions: Position[], currentPrices: Map<string, number
   return exits;
 }
 
-// ===================== LAYER 7: LOSS CONTAINMENT =====================
+// ===================== LAYER 8B: WINNER SCALING =====================
+interface AddOnAction {
+  symbol: string;
+  amount: number;
+  price: number;
+}
+
+function determineAddOns(positions: Position[], markets: Map<string, MarketData>, state: SystemState): AddOnAction[] {
+  const addOns: AddOnAction[] = [];
+  
+  if (state.mode === 'defense' || state.mode === 'halted') return addOns;
+  
+  for (const pos of positions) {
+    if (pos.addOnExecuted) continue;
+    
+    const market = markets.get(pos.symbol);
+    if (!market) continue;
+    
+    const pnlPercent = (market.last - pos.entryPrice) / pos.entryPrice;
+    
+    // Add-on at +6% in TREND_CONTINUATION
+    if (pnlPercent >= CONFIG.ADDON_THRESHOLD && market.regime === 'TREND_CONTINUATION') {
+      const addOnSize = pos.originalAmount * CONFIG.ADDON_SIZE * pos.entryPrice;
+      
+      // Check exposure limits
+      const newExposure = state.totalExposure + addOnSize;
+      const maxExposure = state.currentBalance * CONFIG.MAX_EXPOSURE;
+      
+      if (newExposure <= maxExposure) {
+        addOns.push({
+          symbol: pos.symbol,
+          amount: addOnSize / market.last,
+          price: market.last,
+        });
+      }
+    }
+  }
+  
+  return addOns;
+}
+
+// ===================== LAYER 10: LOSS ADAPTATION =====================
 function evaluateSystemMode(state: SystemState): SystemState['mode'] {
-  // HARD STOP
+  // HARD HALT
   if (state.dailyPnLPercent <= -CONFIG.DAILY_DRAWDOWN_HALT) {
     return 'halted';
   }
   
-  // Defense Mode
-  if (state.dailyPnLPercent <= -CONFIG.DAILY_DRAWDOWN_CAUTION) {
+  // Defense Mode triggers
+  if (state.dailyPnLPercent <= -CONFIG.DAILY_DRAWDOWN_DEFENSE) {
     return 'defense';
   }
-  
-  // Win rate too low
-  if (state.totalTrades >= 10 && state.winRate < CONFIG.MIN_WIN_RATE) {
-    return 'defense';
-  }
-  
-  // Consecutive losses
   if (state.consecutiveLosses >= CONFIG.CONSECUTIVE_LOSS_THRESHOLD) {
     return 'defense';
   }
+  if (state.totalTrades >= 10 && state.winRate < 0.35) {
+    return 'defense';
+  }
   
-  // Aggressive mode for strong performance
+  // Aggressive mode
   if (state.winRate > 0.55 && state.dailyPnLPercent > 0.01 && state.consecutiveLosses === 0) {
     return 'aggressive';
   }
@@ -514,7 +682,40 @@ function evaluateSystemMode(state: SystemState): SystemState['mode'] {
   return 'normal';
 }
 
-// ===================== LAYER 8: EXECUTION =====================
+// ===================== LAYER 11: ERROR CLASSIFICATION =====================
+function classifyLoss(trade: any, market?: MarketData): LossReason {
+  const expectedEdge = trade.expected_edge || 0;
+  const actualPnL = trade.actual_pnl || 0;
+  
+  // Slippage if actual much worse than expected
+  if (actualPnL < expectedEdge * -0.5) {
+    return 'SLIPPAGE';
+  }
+  
+  // Stop hunt if hit stop and recovered
+  if (trade.type === 'stop_loss' && market && market.last > trade.price * 1.02) {
+    return 'STOP_HUNT';
+  }
+  
+  // Regime change
+  if (market?.regime === 'PANIC_LIQUIDITY_EVENT') {
+    return 'REGIME_CHANGE';
+  }
+  
+  // Overextended entry
+  if (market && market.change24h > 15) {
+    return 'OVEREXTENDED_ENTRY';
+  }
+  
+  // Volume fake (low volume on entry)
+  if (market && market.volume < CONFIG.MIN_VOLUME * 0.5) {
+    return 'VOLUME_FAKE';
+  }
+  
+  return 'UNKNOWN';
+}
+
+// ===================== EXECUTION =====================
 async function executeOrder(
   pair: string,
   side: 'buy' | 'sell',
@@ -541,14 +742,13 @@ async function executeOrder(
   }
 }
 
-// ===================== LAYER 9: PERFORMANCE FEEDBACK =====================
+// ===================== PERFORMANCE METRICS =====================
 async function getPerformanceMetrics(): Promise<{
   winRate: number;
   profitFactor: number;
   totalTrades: number;
-  winningTrades: number;
-  avgWin: number;
-  avgLoss: number;
+  consecutiveLosses: number;
+  lastLossTime?: number;
 }> {
   const { data: trades } = await supabase
     .from('trade_history')
@@ -557,72 +757,106 @@ async function getPerformanceMetrics(): Promise<{
     .order('executed_at', { ascending: false });
   
   if (!trades || trades.length === 0) {
-    return { winRate: 0.5, profitFactor: 1, totalTrades: 0, winningTrades: 0, avgWin: 0, avgLoss: 0 };
+    return { winRate: 0.5, profitFactor: 1, totalTrades: 0, consecutiveLosses: 0 };
   }
   
   const wins = trades.filter(t => (t.actual_pnl || 0) > 0);
   const losses = trades.filter(t => (t.actual_pnl || 0) < 0);
+  
+  // Count consecutive losses from most recent
+  let consecutiveLosses = 0;
+  let lastLossTime: number | undefined;
+  for (const trade of trades) {
+    if ((trade.actual_pnl || 0) < 0) {
+      consecutiveLosses++;
+      if (!lastLossTime) lastLossTime = new Date(trade.executed_at).getTime();
+    } else {
+      break;
+    }
+  }
   
   const totalWins = wins.reduce((sum, t) => sum + (t.actual_pnl || 0), 0);
   const totalLosses = Math.abs(losses.reduce((sum, t) => sum + (t.actual_pnl || 0), 0));
   
   return {
     winRate: trades.length > 0 ? wins.length / trades.length : 0.5,
-    profitFactor: totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? 10 : 1,
+    profitFactor: totalLosses > 0 ? totalWins / totalLosses : (totalWins > 0 ? 10 : 1),
     totalTrades: trades.length,
-    winningTrades: wins.length,
-    avgWin: wins.length > 0 ? totalWins / wins.length : 0,
-    avgLoss: losses.length > 0 ? totalLosses / losses.length : 0,
+    consecutiveLosses,
+    lastLossTime,
   };
 }
 
-// ===================== MAIN ORCHESTRATOR =====================
+// ===================== MAIN CYCLE =====================
 async function runTradingCycle(): Promise<{
   scanned: number;
   signals: number;
   entries: number;
   exits: number;
+  addOns: number;
   pnl: number;
   balance: number;
   mode: string;
+  regime: string;
+  session: string;
 }> {
   const cycleStart = Date.now();
   
-  // Get balances and current state
+  // Get balances
   const balances = await gateRequest('/spot/accounts');
   const usdtBalance = balances.find((b: { currency: string }) => b.currency === 'USDT');
   const currentUSDT = usdtBalance ? parseFloat(usdtBalance.available) : 0;
   
-  // Get DB state
   const dbState = await getDBState();
   const startingBalance = dbState?.current_balance || currentUSDT;
-  
-  // Get performance metrics
   const metrics = await getPerformanceMetrics();
   
-  // Build current positions
-  const positions: Position[] = [];
-  const tickers = await gateRequest('/spot/tickers');
-  const tickerMap = new Map<string, { last: string; highest_bid: string }>(
-    tickers.map((t: { currency_pair: string; last: string; highest_bid: string }) => [t.currency_pair, t])
-  );
+  // Get all tickers for whitelist and scanning
+  const allTickers = await gateRequest('/spot/tickers');
   
+  // Detect high volatility regime
+  const avgVolatility = allTickers.reduce((sum: number, t: any) => {
+    const high = parseFloat(t.high_24h);
+    const low = parseFloat(t.low_24h);
+    const last = parseFloat(t.last);
+    return sum + ((high - low) / last) * 100;
+  }, 0) / allTickers.length;
+  const highVolatility = avgVolatility > 5;
+  
+  // Build whitelist (Layer 2)
+  const whitelist = await buildWhitelist(allTickers, highVolatility);
+  
+  // Scan markets (Layer 3)
+  const markets = await scanMarkets(whitelist, highVolatility);
+  const marketMap = new Map(markets.map(m => [m.pair, m]));
+  
+  // Determine dominant regime
+  const regimeCounts: Record<MarketRegime, number> = {
+    'TREND_CONTINUATION': 0,
+    'BREAKOUT_EXPANSION': 0,
+    'RANGE_MEAN_REVERSION': 0,
+    'DISTRIBUTION_EXHAUSTION': 0,
+    'PANIC_LIQUIDITY_EVENT': 0,
+  };
+  markets.forEach(m => regimeCounts[m.regime]++);
+  const dominantRegime = Object.entries(regimeCounts)
+    .sort((a, b) => b[1] - a[1])[0][0] as MarketRegime;
+  
+  // Build positions
+  const positions: Position[] = [];
   let totalExposure = 0;
   
   for (const balance of balances) {
     if (balance.currency === 'USDT' || parseFloat(balance.available) <= 0) continue;
     
     const pair = `${balance.currency}_USDT`;
-    const ticker = tickerMap.get(pair);
-    if (!ticker) continue;
+    const market = marketMap.get(pair);
+    if (!market) continue;
     
-    const currentPrice = parseFloat(ticker.last);
     const amount = parseFloat(balance.available);
-    const value = amount * currentPrice;
+    const value = amount * market.last;
+    if (value < 3) continue;
     
-    if (value < 3) continue; // Skip dust
-    
-    // Get entry info from trade history
     const { data: entryTrade } = await supabase
       .from('trade_history')
       .select('*')
@@ -631,8 +865,8 @@ async function runTradingCycle(): Promise<{
       .order('executed_at', { ascending: false })
       .limit(1);
     
-    const entryPrice = entryTrade?.[0]?.price || currentPrice;
-    const pnlPercent = (currentPrice - entryPrice) / entryPrice;
+    const entryPrice = entryTrade?.[0]?.price || market.last;
+    const pnlPercent = (market.last - entryPrice) / entryPrice;
     const stopLoss = entryPrice * (1 - CONFIG.STOP_LOSS_MIN);
     const trailingActivated = pnlPercent >= CONFIG.TRAILING_ACTIVATION;
     
@@ -641,28 +875,34 @@ async function runTradingCycle(): Promise<{
       currency: balance.currency,
       entryPrice,
       amount,
+      originalAmount: amount,
       value,
-      currentPrice,
+      currentPrice: market.last,
       pnlPercent,
       stopLoss,
-      trailingStop: trailingActivated ? calculateTrailingStop({ stopLoss, trailingStop: undefined, trailingActivated: false } as Position, currentPrice) : undefined,
+      trailingStop: trailingActivated ? calculateTrailingStop({ stopLoss, trailingActivated: false } as Position, market.last, market.volatility) : undefined,
       trailingActivated,
-      tp1Hit: false, // Would need to track this
+      tp1Hit: false,
       tp2Hit: false,
+      addOnExecuted: false,
       entryTime: Date.now(),
+      regime: market.regime,
     });
     
     totalExposure += value;
   }
   
-  // Calculate daily P&L
+  // Build system state
   const dailyPnL = currentUSDT + totalExposure - startingBalance;
   const dailyPnLPercent = startingBalance > 0 ? dailyPnL / startingBalance : 0;
+  const isHighLiq = isHighLiquiditySession();
   
-  // Build system state
   const state: SystemState = {
     mode: 'normal',
-    consecutiveLosses: 0, // Would track from trade history
+    regime: dominantRegime,
+    isHighLiquiditySession: isHighLiq,
+    consecutiveLosses: metrics.consecutiveLosses,
+    recentLossTime: metrics.lastLossTime,
     dailyPnL,
     dailyPnLPercent,
     startingBalance,
@@ -672,43 +912,42 @@ async function runTradingCycle(): Promise<{
     riskMultiplier: 1.0,
     winRate: metrics.winRate,
     totalTrades: metrics.totalTrades,
-    winningTrades: metrics.winningTrades,
+    lastTradeTime: Date.now(),
+    capitalIdleTime: 0,
+    whitelistedPairs: whitelist,
   };
   
-  // Evaluate system mode
   state.mode = evaluateSystemMode(state);
   
-  // HALTED - No trading
+  // HALTED
   if (state.mode === 'halted') {
-    await log('error', 'ENGINE', `🛑 SYSTEM HALTED - Daily drawdown: ${(dailyPnLPercent * 100).toFixed(2)}%`);
-    return { scanned: 0, signals: 0, entries: 0, exits: 0, pnl: dailyPnL, balance: currentUSDT + totalExposure, mode: 'halted' };
+    await log('error', 'ENGINE', `🛑 HALTED | Drawdown: ${(dailyPnLPercent * 100).toFixed(2)}%`);
+    return { scanned: 0, signals: 0, entries: 0, exits: 0, addOns: 0, pnl: dailyPnL, balance: currentUSDT + totalExposure, mode: 'halted', regime: dominantRegime, session: isHighLiq ? 'HIGH' : 'LOW' };
   }
   
-  await log('info', 'ENGINE', `Mode: ${state.mode.toUpperCase()} | Balance: $${currentUSDT.toFixed(2)} | Exposure: $${totalExposure.toFixed(2)} | Daily P&L: ${(dailyPnLPercent * 100).toFixed(2)}%`);
+  await log('info', 'ENGINE', `${state.mode.toUpperCase()} | ${dominantRegime} | Session: ${isHighLiq ? 'HIGH' : 'LOW'} | Balance: $${currentUSDT.toFixed(2)} | Exposure: $${totalExposure.toFixed(2)}`);
   
-  // LAYER 1: Scan markets
-  const markets = await scanMarkets();
-  await log('info', 'SCANNER', `Scanned ${markets.length} pairs (filtered from tickers)`);
-  
-  // LAYER 4: Process exits first (risk control)
-  const currentPrices = new Map<string, number>(
-    positions.map(p => [p.symbol, p.currentPrice])
-  );
-  const exitActions = determineExits(positions, currentPrices);
-  
+  // EXITS (Layer 7, 8)
+  const exitActions = determineExits(positions, marketMap);
   let totalExitPnL = 0;
   let exitCount = 0;
   
   for (const exit of exitActions) {
-    const bid = parseFloat(tickerMap.get(exit.symbol)?.highest_bid || '0');
-    if (bid <= 0) continue;
+    const market = marketMap.get(exit.symbol);
+    if (!market) continue;
     
-    const result = await executeOrder(exit.symbol, 'sell', exit.amount, bid, false);
+    const result = await executeOrder(exit.symbol, 'sell', exit.amount, market.bid, false);
     
     if (result.success) {
       const pnlUSDT = exit.amount * exit.price * exit.pnlPercent;
       totalExitPnL += pnlUSDT;
       exitCount++;
+      
+      // Log loss classification
+      if (pnlUSDT < 0) {
+        const lossReason = classifyLoss({ type: exit.reason, price: exit.price, actual_pnl: pnlUSDT }, market);
+        await log('warn', 'LOSS', `${lossReason}: ${exit.currency} | ${(exit.pnlPercent * 100).toFixed(2)}%`);
+      }
       
       await recordTrade({
         orderId: result.orderId || 'unknown',
@@ -722,36 +961,51 @@ async function runTradingCycle(): Promise<{
         status: 'filled',
       });
       
-      const emoji = exit.reason === 'stop_loss' ? '🔴' : exit.reason.startsWith('tp') ? '🟢' : '🟡';
+      const emoji = exit.reason.includes('stop') ? '🔴' : exit.reason.startsWith('tp') ? '🟢' : '🟡';
       await log('info', 'EXIT', `${emoji} ${exit.reason.toUpperCase()}: ${exit.currency} | ${(exit.pnlPercent * 100).toFixed(2)}% | $${pnlUSDT.toFixed(2)}`);
-      
-      // After TP1, move stop to breakeven
-      if (exit.reason === 'tp1') {
-        // Would update position's stop loss to entry + fees
-      }
     }
     
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150));
   }
   
-  // LAYER 2: Entry signals
-  const signals = analyzeEntrySignals(markets, state);
-  await log('info', 'SIGNALS', `Found ${signals.length} entry signals`);
+  // ADD-ONS (Layer 8)
+  const addOnActions = determineAddOns(positions, marketMap, state);
+  let addOnCount = 0;
   
-  // LAYER 6: Capital rotation - deploy capital immediately
-  let entryCount = 0;
-  const maxNewPositions = CONFIG.MAX_SIMULTANEOUS_POSITIONS - positions.length + exitCount;
-  
-  for (const signal of signals.slice(0, Math.min(maxNewPositions, 2))) {
-    // Defense mode: only top 10 liquidity
-    if (state.mode === 'defense') {
-      const marketRank = markets.findIndex(m => m.pair === signal.pair);
-      if (marketRank > 10) continue;
-    }
+  for (const addOn of addOnActions) {
+    const market = marketMap.get(addOn.symbol);
+    if (!market) continue;
     
-    // Calculate position size
+    const result = await executeOrder(addOn.symbol, 'buy', addOn.amount, addOn.price, true);
+    
+    if (result.success) {
+      addOnCount++;
+      await recordTrade({
+        orderId: result.orderId || 'unknown',
+        symbol: addOn.symbol.replace('_', '/'),
+        side: 'buy',
+        type: 'add_on',
+        amount: addOn.amount,
+        price: addOn.price,
+        expectedEdge: CONFIG.ADDON_THRESHOLD * 100,
+        status: 'filled',
+      });
+      await log('info', 'ADD_ON', `📈 Added to winner: ${addOn.symbol}`);
+    }
+  }
+  
+  // ENTRIES (Layer 4, 5, 6)
+  const signals = analyzeEntrySignals(markets, state);
+  let entryCount = 0;
+  
+  // Limit entries based on session and mode
+  let maxNewEntries = 2;
+  if (!isHighLiq) maxNewEntries = 1;
+  if (state.mode === 'defense') maxNewEntries = 1;
+  
+  for (const signal of signals.slice(0, maxNewEntries)) {
     const size = calculatePositionSize(signal, state);
-    if (size < 5) continue; // Min trade size
+    if (size < 5) continue;
     
     const amount = size / signal.price;
     
@@ -772,13 +1026,13 @@ async function runTradingCycle(): Promise<{
         status: 'filled',
       });
       
-      await log('info', 'ENTRY', `🔵 ${signal.reason.toUpperCase()}: ${signal.currency} @ $${signal.price.toFixed(6)} | R:R ${signal.rewardRisk.toFixed(1)} | SL: $${signal.stopLoss.toFixed(6)}`);
+      await log('info', 'ENTRY', `🔵 ${signal.reason.toUpperCase()} [${signal.regime}]: ${signal.currency} @ $${signal.price.toFixed(6)} | R:R ${signal.rewardRisk.toFixed(1)} | SL: $${signal.stopLoss.toFixed(6)}`);
     }
     
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150));
   }
   
-  // Update DB state
+  // Update state
   const newBalance = currentUSDT + totalExposure + totalExitPnL;
   await updateDBState({
     current_balance: newBalance,
@@ -789,16 +1043,19 @@ async function runTradingCycle(): Promise<{
   });
   
   const cycleDuration = Date.now() - cycleStart;
-  await log('info', 'ENGINE', `Cycle complete in ${cycleDuration}ms | Entries: ${entryCount} | Exits: ${exitCount} | P&L: $${totalExitPnL.toFixed(2)}`);
+  await log('info', 'ENGINE', `Cycle ${cycleDuration}ms | E:${entryCount} X:${exitCount} A:${addOnCount} | P&L: $${totalExitPnL.toFixed(2)}`);
   
   return {
     scanned: markets.length,
     signals: signals.length,
     entries: entryCount,
     exits: exitCount,
+    addOns: addOnCount,
     pnl: totalExitPnL,
     balance: newBalance,
     mode: state.mode,
+    regime: dominantRegime,
+    session: isHighLiq ? 'HIGH_LIQUIDITY' : 'LOW_LIQUIDITY',
   };
 }
 
@@ -814,10 +1071,9 @@ serve(async (req) => {
     
     const dbState = await getDBState();
     
-    // Command handlers
     if (command === 'stop') {
       await updateDBState({ is_active: false });
-      await log('warn', 'ENGINE', '🛑 System STOPPED by user');
+      await log('warn', 'ENGINE', '🛑 System STOPPED');
       return new Response(JSON.stringify({ success: true, message: 'System stopped' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -839,19 +1095,18 @@ serve(async (req) => {
         metrics,
         recentTrades: recentTrades.data,
         recentLogs: recentLogs.data,
+        session: isHighLiquiditySession() ? 'HIGH_LIQUIDITY' : 'LOW_LIQUIDITY',
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
     
-    // Check if active
     if (!dbState?.is_active && command !== 'start') {
-      return new Response(JSON.stringify({ success: false, error: 'System is stopped. Send command: "start" to activate.' }), {
+      return new Response(JSON.stringify({ success: false, error: 'System stopped. Send "start" to activate.' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
     
-    // Run trading cycle
     const result = await runTradingCycle();
     
     return new Response(JSON.stringify({
