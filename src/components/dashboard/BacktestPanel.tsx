@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Progress } from "@/components/ui/progress";
 import { 
   FlaskConical, 
   Play, 
@@ -17,13 +18,19 @@ import {
   Clock,
   Zap,
   Settings2,
-  Trophy
+  Trophy,
+  Shield,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle
 } from "lucide-react";
 import { useBacktest, BacktestConfig, BacktestResult } from "@/hooks/useBacktest";
 import { useOptimization, OptimizeConfig, OptimizationResult } from "@/hooks/useOptimization";
+import { useWalkForward, WalkForwardConfig, WalkForwardResult } from "@/hooks/useWalkForward";
 import { formatBacktestDate } from "@/lib/backtest";
 import { getMetricLabel } from "@/lib/optimize";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { getRecommendationLabel, getRecommendationColor } from "@/lib/walk-forward";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, BarChart, Bar, Cell } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 
 const POPULAR_PAIRS = [
@@ -49,11 +56,12 @@ export function BacktestPanel() {
   const { toast } = useToast();
   const backtest = useBacktest();
   const optimization = useOptimization();
+  const walkForward = useWalkForward();
   
   const [config, setConfig] = useState<BacktestConfig>({
     symbol: 'BTC_USDT',
     strategy: 'momentum',
-    startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    startDate: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 90 days for WFA
     endDate: new Date().toISOString().split('T')[0],
     initialCapital: 10000,
     positionSize: 10,
@@ -62,9 +70,13 @@ export function BacktestPanel() {
   });
   
   const [optimizeMetric, setOptimizeMetric] = useState<'return' | 'sharpe' | 'profit_factor' | 'win_rate'>('sharpe');
+  const [wfaWindows, setWfaWindows] = useState(6);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [optResult, setOptResult] = useState<OptimizationResult | null>(null);
+  const [wfaResult, setWfaResult] = useState<WalkForwardResult | null>(null);
   const [activeTab, setActiveTab] = useState('config');
+
+  const isLoading = backtest.isPending || optimization.isPending || walkForward.isPending;
 
   const handleRunBacktest = async () => {
     try {
@@ -105,7 +117,6 @@ export function BacktestPanel() {
       setOptResult(data);
       setActiveTab('optimize');
       
-      // Apply best params to config
       setConfig(c => ({
         ...c,
         positionSize: data.bestParams.positionSize,
@@ -126,6 +137,36 @@ export function BacktestPanel() {
     }
   };
 
+  const handleRunWalkForward = async () => {
+    try {
+      const wfaConfig: WalkForwardConfig = {
+        symbol: config.symbol,
+        strategy: config.strategy,
+        startDate: config.startDate,
+        endDate: config.endDate,
+        initialCapital: config.initialCapital,
+        windows: wfaWindows,
+        inSampleRatio: 0.7,
+        metric: optimizeMetric,
+      };
+      
+      const data = await walkForward.mutateAsync(wfaConfig);
+      setWfaResult(data);
+      setActiveTab('walkforward');
+      
+      toast({
+        title: "Walk-Forward הושלם!",
+        description: `המלצה: ${getRecommendationLabel(data.recommendation)} (${data.aggregatedMetrics.stabilityScore.toFixed(0)}% יציבות)`,
+      });
+    } catch (error) {
+      toast({
+        title: "שגיאה ב-Walk-Forward",
+        description: error instanceof Error ? error.message : "שגיאה לא ידועה",
+        variant: "destructive"
+      });
+    }
+  };
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
   };
@@ -135,15 +176,34 @@ export function BacktestPanel() {
     return score.toFixed(2);
   };
 
+  const getRecommendationIcon = (rec: string) => {
+    switch (rec) {
+      case 'strong': return <CheckCircle2 className="h-5 w-5 text-primary" />;
+      case 'moderate': return <AlertTriangle className="h-5 w-5 text-accent-foreground" />;
+      case 'weak': return <AlertTriangle className="h-5 w-5 text-muted-foreground" />;
+      case 'avoid': return <XCircle className="h-5 w-5 text-destructive" />;
+      default: return null;
+    }
+  };
+
   return (
     <Card className="h-full flex flex-col overflow-hidden border-border/50 bg-card/50 backdrop-blur-sm">
       <CardHeader className="py-3 px-4 border-b border-border/30 flex-shrink-0">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FlaskConical className="h-4 w-4 text-primary" />
-            <CardTitle className="text-sm font-medium">Backtesting & Optimization</CardTitle>
+            <CardTitle className="text-sm font-medium">Backtesting & Analysis</CardTitle>
           </div>
           <div className="flex gap-2">
+            {wfaResult && (
+              <Badge 
+                variant="outline" 
+                className={`text-xs ${getRecommendationColor(wfaResult.recommendation)}`}
+              >
+                <Shield className="h-3 w-3 mr-1" />
+                {getRecommendationLabel(wfaResult.recommendation)}
+              </Badge>
+            )}
             {optResult && (
               <Badge variant="outline" className="text-xs border-accent text-accent-foreground">
                 <Zap className="h-3 w-3 mr-1" />
@@ -164,13 +224,17 @@ export function BacktestPanel() {
       
       <CardContent className="flex-1 p-0 overflow-hidden">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-          <TabsList className="w-full justify-start rounded-none border-b border-border/30 bg-transparent px-4">
+          <TabsList className="w-full justify-start rounded-none border-b border-border/30 bg-transparent px-2 overflow-x-auto">
             <TabsTrigger value="config" className="text-xs">הגדרות</TabsTrigger>
             <TabsTrigger value="results" className="text-xs" disabled={!result}>תוצאות</TabsTrigger>
             <TabsTrigger value="trades" className="text-xs" disabled={!result}>עסקאות</TabsTrigger>
             <TabsTrigger value="optimize" className="text-xs" disabled={!optResult}>
               <Zap className="h-3 w-3 mr-1" />
               אופטימיזציה
+            </TabsTrigger>
+            <TabsTrigger value="walkforward" className="text-xs" disabled={!wfaResult}>
+              <Shield className="h-3 w-3 mr-1" />
+              WFA
             </TabsTrigger>
           </TabsList>
           
@@ -292,7 +356,7 @@ export function BacktestPanel() {
               {/* Run Backtest Button */}
               <Button 
                 onClick={handleRunBacktest}
-                disabled={backtest.isPending || optimization.isPending}
+                disabled={isLoading}
                 className="w-full"
               >
                 {backtest.isPending ? (
@@ -312,7 +376,7 @@ export function BacktestPanel() {
               <div className="border-t border-border/30 pt-4 mt-4">
                 <div className="flex items-center gap-2 mb-3">
                   <Settings2 className="h-4 w-4 text-accent-foreground" />
-                  <Label className="text-xs font-medium">אופטימיזציה אוטומטית</Label>
+                  <Label className="text-xs font-medium">כלי ניתוח מתקדמים</Label>
                 </div>
                 
                 <div className="space-y-3">
@@ -330,27 +394,56 @@ export function BacktestPanel() {
                     </Select>
                   </div>
                   
-                  <Button 
-                    onClick={handleRunOptimization}
-                    disabled={backtest.isPending || optimization.isPending}
-                    variant="secondary"
-                    className="w-full"
-                  >
-                    {optimization.isPending ? (
-                      <>
-                        <Clock className="h-4 w-4 mr-2 animate-spin" />
-                        מחפש פרמטרים אופטימליים...
-                      </>
-                    ) : (
-                      <>
-                        <Zap className="h-4 w-4 mr-2" />
-                        הרץ אופטימיזציה
-                      </>
-                    )}
-                  </Button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button 
+                      onClick={handleRunOptimization}
+                      disabled={isLoading}
+                      variant="secondary"
+                      size="sm"
+                      className="w-full text-xs"
+                    >
+                      {optimization.isPending ? (
+                        <Clock className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <Zap className="h-3 w-3 mr-1" />
+                      )}
+                      אופטימיזציה
+                    </Button>
+                    
+                    <Button 
+                      onClick={handleRunWalkForward}
+                      disabled={isLoading}
+                      variant="outline"
+                      size="sm"
+                      className="w-full text-xs"
+                    >
+                      {walkForward.isPending ? (
+                        <Clock className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <Shield className="h-3 w-3 mr-1" />
+                      )}
+                      Walk-Forward
+                    </Button>
+                  </div>
+                  
+                  {/* WFA Windows Setting */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <Label className="text-[10px] text-muted-foreground">חלונות WFA</Label>
+                      <span className="text-[10px] text-muted-foreground">{wfaWindows}</span>
+                    </div>
+                    <Slider
+                      value={[wfaWindows]}
+                      onValueChange={([v]) => setWfaWindows(v)}
+                      min={3}
+                      max={12}
+                      step={1}
+                      className="w-full"
+                    />
+                  </div>
                   
                   <p className="text-[10px] text-muted-foreground text-center">
-                    סורק מאות שילובי פרמטרים כדי למצוא את התצורה האופטימלית
+                    Walk-Forward מחלק את הנתונים לחלונות, מאמן על כל אחד ובודק על הבא
                   </p>
                 </div>
               </div>
@@ -438,11 +531,7 @@ export function BacktestPanel() {
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={result.equityCurve}>
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                        <XAxis 
-                          dataKey="time" 
-                          tick={false}
-                          axisLine={{ stroke: 'hsl(var(--border))' }}
-                        />
+                        <XAxis dataKey="time" tick={false} axisLine={{ stroke: 'hsl(var(--border))' }} />
                         <YAxis 
                           tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
                           axisLine={{ stroke: 'hsl(var(--border))' }}
@@ -450,23 +539,12 @@ export function BacktestPanel() {
                           width={40}
                         />
                         <Tooltip 
-                          contentStyle={{ 
-                            background: 'hsl(var(--card))', 
-                            border: '1px solid hsl(var(--border))',
-                            borderRadius: '8px',
-                            fontSize: '12px'
-                          }}
+                          contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }}
                           formatter={(value: number) => [formatCurrency(value), 'הון']}
                           labelFormatter={(label) => formatBacktestDate(label)}
                         />
                         <ReferenceLine y={result.initialCapital} stroke="hsl(var(--muted-foreground))" strokeDasharray="3 3" />
-                        <Line 
-                          type="monotone" 
-                          dataKey="equity" 
-                          stroke="hsl(var(--primary))" 
-                          strokeWidth={2}
-                          dot={false}
-                        />
+                        <Line type="monotone" dataKey="equity" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
@@ -550,19 +628,6 @@ export function BacktestPanel() {
                     </div>
                   </div>
                   
-                  {optResult.bestParams.period && (
-                    <div className="grid grid-cols-2 gap-3 mt-3 text-xs">
-                      <div className="bg-background/50 rounded-lg p-2 text-center">
-                        <div className="text-muted-foreground mb-1">Period</div>
-                        <div className="font-bold">{optResult.bestParams.period}</div>
-                      </div>
-                      <div className="bg-background/50 rounded-lg p-2 text-center">
-                        <div className="text-muted-foreground mb-1">Threshold</div>
-                        <div className="font-bold">{optResult.bestParams.threshold?.toFixed(2)}</div>
-                      </div>
-                    </div>
-                  )}
-                  
                   <div className="mt-3 p-2 bg-primary/10 rounded-lg text-center">
                     <div className="text-xs text-muted-foreground">{getMetricLabel(optResult.metric)}</div>
                     <div className="text-xl font-bold text-primary">
@@ -571,16 +636,13 @@ export function BacktestPanel() {
                   </div>
                 </div>
                 
-                {/* Stats */}
                 <div className="text-xs text-muted-foreground text-center">
                   נבדקו {optResult.totalIterations} שילובים על {optResult.candlesUsed} נרות
                 </div>
                 
                 {/* Top Results Table */}
                 <div className="bg-background/50 rounded-lg">
-                  <div className="text-xs font-medium p-3 border-b border-border/30">
-                    Top 10 תוצאות
-                  </div>
+                  <div className="text-xs font-medium p-3 border-b border-border/30">Top 10 תוצאות</div>
                   <Table>
                     <TableHeader>
                       <TableRow className="text-[10px]">
@@ -609,15 +671,137 @@ export function BacktestPanel() {
                   </Table>
                 </div>
                 
-                {/* Apply Button */}
-                <Button 
-                  onClick={handleRunBacktest}
-                  disabled={backtest.isPending}
-                  className="w-full"
-                >
+                <Button onClick={handleRunBacktest} disabled={backtest.isPending} className="w-full">
                   <Play className="h-4 w-4 mr-2" />
-                  הרץ Backtest עם הפרמטרים האופטימליים
+                  הרץ Backtest עם הפרמטרים
                 </Button>
+              </div>
+            )}
+          </TabsContent>
+          
+          <TabsContent value="walkforward" className="flex-1 p-4 overflow-auto m-0">
+            {wfaResult && (
+              <div className="space-y-4">
+                {/* Recommendation Card */}
+                <div className={`rounded-lg p-4 border ${
+                  wfaResult.recommendation === 'strong' ? 'bg-primary/10 border-primary/30' :
+                  wfaResult.recommendation === 'moderate' ? 'bg-accent/20 border-accent/30' :
+                  wfaResult.recommendation === 'weak' ? 'bg-muted/50 border-border' :
+                  'bg-destructive/10 border-destructive/30'
+                }`}>
+                  <div className="flex items-center gap-3 mb-2">
+                    {getRecommendationIcon(wfaResult.recommendation)}
+                    <div>
+                      <div className={`font-bold ${getRecommendationColor(wfaResult.recommendation)}`}>
+                        המלצה: {getRecommendationLabel(wfaResult.recommendation)}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {wfaResult.recommendationReason}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Key Metrics */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-background/50 rounded-lg p-3 space-y-2">
+                    <div className="text-xs text-muted-foreground">יציבות (Stability)</div>
+                    <div className="text-2xl font-bold">
+                      {wfaResult.aggregatedMetrics.stabilityScore.toFixed(0)}%
+                    </div>
+                    <Progress value={wfaResult.aggregatedMetrics.stabilityScore} className="h-1" />
+                    <div className="text-[10px] text-muted-foreground">
+                      {wfaResult.aggregatedMetrics.profitableWindows}/{wfaResult.aggregatedMetrics.totalWindows} חלונות רווחיים
+                    </div>
+                  </div>
+                  <div className="bg-background/50 rounded-lg p-3 space-y-2">
+                    <div className="text-xs text-muted-foreground">חוסן (Robustness)</div>
+                    <div className="text-2xl font-bold">
+                      {Math.min(100, wfaResult.aggregatedMetrics.robustnessScore).toFixed(0)}%
+                    </div>
+                    <Progress value={Math.min(100, wfaResult.aggregatedMetrics.robustnessScore)} className="h-1" />
+                    <div className="text-[10px] text-muted-foreground">
+                      יחס ביצועי Out vs In Sample
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Aggregated Performance */}
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-background/50 rounded-lg p-2 text-center">
+                    <div className="text-muted-foreground mb-1">תשואה מצטברת</div>
+                    <div className={`font-bold ${wfaResult.aggregatedMetrics.totalOutSampleReturn >= 0 ? 'text-primary' : 'text-destructive'}`}>
+                      {wfaResult.aggregatedMetrics.totalOutSampleReturn >= 0 ? '+' : ''}
+                      {wfaResult.aggregatedMetrics.totalOutSampleReturn.toFixed(1)}%
+                    </div>
+                  </div>
+                  <div className="bg-background/50 rounded-lg p-2 text-center">
+                    <div className="text-muted-foreground mb-1">Avg Win Rate</div>
+                    <div className="font-bold">
+                      {wfaResult.aggregatedMetrics.outSampleWinRate.toFixed(0)}%
+                    </div>
+                  </div>
+                  <div className="bg-background/50 rounded-lg p-2 text-center">
+                    <div className="text-muted-foreground mb-1">Max Drawdown</div>
+                    <div className="font-bold text-destructive">
+                      -{wfaResult.aggregatedMetrics.maxDrawdown.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Windows Performance Chart */}
+                <div className="bg-background/50 rounded-lg p-3">
+                  <div className="text-xs text-muted-foreground mb-2">ביצועי Out-of-Sample לפי חלון</div>
+                  <div className="h-32">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={wfaResult.windows}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
+                        <XAxis dataKey="windowIndex" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} />
+                        <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} tickFormatter={(v) => `${v}%`} width={35} />
+                        <Tooltip 
+                          contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }}
+                          formatter={(value: number) => [`${value.toFixed(2)}%`, 'תשואה']}
+                        />
+                        <Bar dataKey="outSampleReturn" radius={[4, 4, 0, 0]}>
+                          {wfaResult.windows.map((w, i) => (
+                            <Cell key={i} fill={w.isProfit ? 'hsl(var(--primary))' : 'hsl(var(--destructive))'} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                
+                {/* Windows Detail Table */}
+                <div className="bg-background/50 rounded-lg">
+                  <div className="text-xs font-medium p-3 border-b border-border/30">פירוט חלונות</div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="text-[10px]">
+                        <TableHead>#</TableHead>
+                        <TableHead>In-Sample</TableHead>
+                        <TableHead>Out-Sample</TableHead>
+                        <TableHead>Trades</TableHead>
+                        <TableHead>Win%</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {wfaResult.windows.map((w) => (
+                        <TableRow key={w.windowIndex} className="text-[10px]">
+                          <TableCell className="font-bold">{w.windowIndex}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {w.inSampleReturn >= 0 ? '+' : ''}{w.inSampleReturn.toFixed(1)}%
+                          </TableCell>
+                          <TableCell className={w.isProfit ? 'text-primary' : 'text-destructive'}>
+                            {w.outSampleReturn >= 0 ? '+' : ''}{w.outSampleReturn.toFixed(1)}%
+                          </TableCell>
+                          <TableCell>{w.outSampleTrades}</TableCell>
+                          <TableCell>{w.outSampleWinRate.toFixed(0)}%</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
             )}
           </TabsContent>
