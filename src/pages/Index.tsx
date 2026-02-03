@@ -6,7 +6,8 @@ import {
   ActivityLog,
   MarketOverview,
   OpportunitiesPanel,
-  BacktestPanel
+  BacktestPanel,
+  ContinuousTradingPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -50,33 +51,38 @@ const Index = () => {
           {/* Mobile: Single column, Tablet: 2 columns, Desktop: 3 columns */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 sm:gap-4 pb-4">
             
+            {/* Continuous Trading Panel - Primary */}
+            <div className="xl:col-span-3 h-auto min-h-[400px]">
+              <ContinuousTradingPanel />
+            </div>
+            
             {/* Treasury Panel */}
             <div className="xl:col-span-3 h-64 sm:h-80 xl:h-auto xl:row-span-1">
               <TreasuryPanel />
             </div>
             
-            {/* Market Overview - Shows prominently on mobile */}
-            <div className="xl:col-span-3 xl:row-start-1 xl:col-start-10 h-64 sm:h-80 xl:h-auto">
+            {/* Market Overview */}
+            <div className="xl:col-span-3 h-64 sm:h-80 xl:h-auto">
               <MarketOverview />
             </div>
             
-            {/* Positions Panel - Full width on tablet */}
-            <div className="md:col-span-2 xl:col-span-6 xl:row-start-1 xl:col-start-4 h-72 sm:h-96 xl:h-auto">
+            {/* Positions Panel */}
+            <div className="xl:col-span-3 h-72 sm:h-96 xl:h-auto">
               <PositionsPanel />
             </div>
             
             {/* Risk Control */}
-            <div className="xl:col-span-3 h-64 sm:h-80">
+            <div className="xl:col-span-4 h-64 sm:h-80">
               <RiskControlPanel />
             </div>
             
             {/* Opportunities */}
-            <div className="md:col-span-2 xl:col-span-6 h-64 sm:h-80">
+            <div className="md:col-span-2 xl:col-span-4 h-64 sm:h-80">
               <OpportunitiesPanel />
             </div>
             
             {/* Activity Log */}
-            <div className="xl:col-span-3 h-64 sm:h-80">
+            <div className="xl:col-span-4 h-64 sm:h-80">
               <ActivityLog />
             </div>
           </div>
