@@ -11,3 +11,4 @@ export { AutonomousControlPanel } from "./AutonomousControlPanel";
 export { TradingChatPanel } from "./TradingChatPanel";
 export { PerformanceDashboard } from "./PerformanceDashboard";
 export { CronJobSetup } from "./CronJobSetup";
+export { TickScalpingPanel } from "./TickScalpingPanel";
