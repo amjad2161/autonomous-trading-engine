@@ -24,11 +24,15 @@ serve(async (req) => {
     const startTime = Date.now();
 
     // Get current state
-    const { data: state } = await supabase
+    const { data: state, error: stateError } = await supabase
       .from('trading_system_state')
       .select('*')
-      .eq('id', 'hyper-engine')
+      .limit(1)
       .maybeSingle();
+
+    if (stateError) {
+      console.error("⚡ [HYPER] Failed to read trading_system_state:", stateError);
+    }
 
     let cycleCount = (state?.total_cycles || 0) + 1;
     let cumulativePnL = state?.total_pnl || 0;
@@ -100,15 +104,41 @@ serve(async (req) => {
     }
 
     // Update state
-    await supabase.from('trading_system_state').upsert({
-      id: 'hyper-engine',
-      is_active: true,
-      total_cycles: cycleCount,
-      total_trades: cumulativeTrades,
-      total_pnl: cumulativePnL,
-      last_heartbeat: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    const nowIso = new Date().toISOString();
+
+    if (state?.id) {
+      const { error: updateError } = await supabase
+        .from('trading_system_state')
+        .update({
+          is_active: true,
+          total_cycles: cycleCount,
+          total_trades: cumulativeTrades,
+          total_pnl: cumulativePnL,
+          last_heartbeat: nowIso,
+          updated_at: nowIso,
+        })
+        .eq('id', state.id);
+
+      if (updateError) {
+        console.error("⚡ [HYPER] Failed to update trading_system_state:", updateError);
+      }
+    } else {
+      // Fallback: if state row doesn't exist for some reason, create one.
+      const { error: insertError } = await supabase
+        .from('trading_system_state')
+        .insert({
+          is_active: true,
+          total_cycles: cycleCount,
+          total_trades: cumulativeTrades,
+          total_pnl: cumulativePnL,
+          last_heartbeat: nowIso,
+          updated_at: nowIso,
+        });
+
+      if (insertError) {
+        console.error("⚡ [HYPER] Failed to insert trading_system_state:", insertError);
+      }
+    }
 
     const duration = Date.now() - startTime;
     console.log(`⚡ [HYPER] Cycle ${cycleCount} done in ${duration}ms`);
