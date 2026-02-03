@@ -1,7 +1,9 @@
 import { Bell, RefreshCw, Wifi, WifiOff, Clock, Settings, LogOut, Menu } from "lucide-react";
-import { useSpotBalances, useTickers, useTotalPortfolioValue, useDailyPnL } from "@/hooks/useGateApi";
+import { useSpotBalances, useTotalPortfolioValue, useDailyPnL } from "@/hooks/useGateApi";
+import { useRealtimeTickers, useWebSocketStatus } from "@/hooks/useGateWebSocket";
 import { formatUSDT, formatPercentage } from "@/lib/gate-api";
 import { useCredentials } from "@/hooks/useCredentials";
+import { useState, useEffect } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,14 +12,31 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 
+// All pairs we need for portfolio valuation
+const ALL_PAIRS = [
+  'BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'DOGE_USDT', 'ADA_USDT',
+  'AVAX_USDT', 'DOT_USDT', 'LINK_USDT', 'MATIC_USDT', 'UNI_USDT', 'ATOM_USDT',
+  'LTC_USDT', 'BCH_USDT', 'NEAR_USDT', 'APT_USDT', 'OP_USDT', 'ARB_USDT'
+];
+
 interface TopBarProps {
   onMenuClick?: () => void;
 }
 
 export function TopBar({ onMenuClick }: TopBarProps) {
   const { data: balances, isLoading, isError, dataUpdatedAt } = useSpotBalances();
-  const { data: tickers } = useTickers();
+  const { data: tickers } = useRealtimeTickers(ALL_PAIRS);
+  const wsStatus = useWebSocketStatus();
   const { clearCredentials, credentials } = useCredentials();
+  const [currentTime, setCurrentTime] = useState(new Date());
+  
+  // Update current time every second for live display
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
   
   // Calculate total portfolio value (all assets converted to USDT)
   const totalPortfolioValue = useTotalPortfolioValue(balances, tickers);
@@ -25,14 +44,12 @@ export function TopBar({ onMenuClick }: TopBarProps) {
   // Calculate daily P&L based on 24h price changes
   const dailyPnL = useDailyPnL(balances, tickers);
 
-  const lastUpdate = dataUpdatedAt 
-    ? new Date(dataUpdatedAt).toLocaleTimeString('en-US', { 
-        hour: '2-digit', 
-        minute: '2-digit', 
-        second: '2-digit',
-        hour12: false 
-      })
-    : '--:--:--';
+  const lastUpdate = currentTime.toLocaleTimeString('en-US', { 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit',
+    hour12: false 
+  });
 
   const handleDisconnect = () => {
     clearCredentials();
@@ -57,14 +74,24 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         </button>
         
         <div className="flex items-center gap-2">
-          {isError ? (
+          {isError || wsStatus === 'error' ? (
             <>
               <WifiOff className="w-4 h-4 text-destructive" />
               <span className="text-sm text-destructive hidden sm:inline">Disconnected</span>
             </>
-          ) : (
+          ) : wsStatus === 'connected' ? (
             <>
               <Wifi className="w-4 h-4 text-profit animate-pulse" />
+              <span className="text-sm text-profit hidden sm:inline">Live</span>
+            </>
+          ) : wsStatus === 'connecting' ? (
+            <>
+              <Wifi className="w-4 h-4 text-warning animate-pulse" />
+              <span className="text-sm text-warning hidden sm:inline">Connecting...</span>
+            </>
+          ) : (
+            <>
+              <Wifi className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm text-muted-foreground hidden sm:inline">Gate.io</span>
             </>
           )}
