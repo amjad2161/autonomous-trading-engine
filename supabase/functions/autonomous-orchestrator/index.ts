@@ -283,74 +283,264 @@ async function runRewardsArm() {
 }
 
 // ==================== ARBITRAGE ARM ====================
-async function runArbitrageArm() {
+interface ArbitrageOpportunity {
+  route: string[];
+  pairs: string[];
+  sides: ('buy' | 'sell')[];
+  prices: number[];
+  amounts: number[];
+  profit: number;
+  profitUSDT: number;
+}
+
+async function executeArbitrageTrade(
+  pair: string, 
+  side: 'buy' | 'sell', 
+  amount: string, 
+  price: string
+): Promise<{ success: boolean; orderId?: string; filled?: string; error?: string }> {
+  try {
+    const order = await gateRequest('/spot/orders', 'POST', {}, {
+      currency_pair: pair,
+      side,
+      amount,
+      price,
+      type: 'limit',
+      time_in_force: 'ioc', // Immediate or Cancel for fast execution
+    });
+    
+    if (order.id) {
+      return { 
+        success: true, 
+        orderId: order.id, 
+        filled: order.filled_total || order.amount 
+      };
+    } else {
+      return { success: false, error: JSON.stringify(order) };
+    }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+  }
+}
+
+async function runArbitrageArm(settings: Record<string, unknown>) {
   await log('info', 'ARBITRAGE', 'Scanning for triangular arbitrage...');
   
   const tickers = await gateRequest('/spot/tickers');
-  const tickerMap = new Map<string, number>(
-    tickers.map((t: { currency_pair: string; last: string }) => [t.currency_pair, parseFloat(t.last)])
+  const tickerMap = new Map<string, { last: string; highest_bid: string; lowest_ask: string }>(
+    tickers.map((t: { currency_pair: string; last: string; highest_bid: string; lowest_ask: string }) => 
+      [t.currency_pair, t]
+    )
   );
   
-  const opportunities = [];
-  const bases = ['BTC', 'ETH', 'USDT'];
+  const opportunities: ArbitrageOpportunity[] = [];
+  const bases = ['USDT']; // Focus on USDT-based arbitrage for simplicity
   
-  // Find triangular arbitrage opportunities
-  for (const base of bases) {
-    const pairs = tickers.filter((t: { currency_pair: string }) => t.currency_pair.endsWith(`_${base}`));
+  // Get available USDT balance
+  const balances = await gateRequest('/spot/accounts');
+  const usdtBalance = balances.find((b: { currency: string }) => b.currency === 'USDT');
+  const availableUSDT = usdtBalance ? parseFloat(usdtBalance.available) : 0;
+  const maxArbAmount = Math.min(availableUSDT * 0.3, (settings.maxTradeSize as number || 25)); // Use 30% of balance max
+  
+  if (availableUSDT < 10) {
+    await log('info', 'ARBITRAGE', 'Insufficient USDT for arbitrage');
+    return { scanned: tickers.length, found: 0, executed: 0, profit: 0 };
+  }
+  
+  // Find triangular arbitrage: USDT → A → B → USDT
+  for (const ticker1 of tickers) {
+    if (!ticker1.currency_pair.endsWith('_USDT')) continue;
     
-    for (const pair1 of pairs) {
-      const currency1 = pair1.currency_pair.split('_')[0];
-      const price1 = parseFloat(pair1.last);
+    const currencyA = ticker1.currency_pair.split('_')[0];
+    const priceA_USDT = parseFloat(ticker1.lowest_ask); // We buy A with USDT
+    if (priceA_USDT <= 0) continue;
+    
+    // Find pairs: A → B
+    for (const ticker2 of tickers) {
+      if (!ticker2.currency_pair.startsWith(currencyA + '_')) continue;
       
-      // Find pair2: currency1 -> another currency
-      for (const pair2 of tickers) {
-        if (!pair2.currency_pair.startsWith(currency1 + '_')) continue;
-        const currency2 = pair2.currency_pair.split('_')[1];
-        if (currency2 === base) continue;
-        const price2 = parseFloat(pair2.last);
+      const currencyB = ticker2.currency_pair.split('_')[1];
+      if (currencyB === 'USDT') continue;
+      
+      const priceA_B = parseFloat(ticker2.highest_bid); // We sell A for B
+      if (priceA_B <= 0) continue;
+      
+      // Find pair: B → USDT
+      const pairB_USDT = `${currencyB}_USDT`;
+      const tickerB = tickerMap.get(pairB_USDT);
+      if (!tickerB) continue;
+      
+      const priceB_USDT = parseFloat(tickerB.highest_bid); // We sell B for USDT
+      if (priceB_USDT <= 0) continue;
+      
+      // Calculate arbitrage profit
+      // Start with 1 USDT:
+      // Step 1: Buy A with USDT → get (1 / priceA_USDT) A
+      // Step 2: Sell A for B → get (amountA * priceA_B) B  
+      // Step 3: Sell B for USDT → get (amountB * priceB_USDT) USDT
+      
+      const amountA = 1 / priceA_USDT;
+      const amountB = amountA * priceA_B;
+      const finalUSDT = amountB * priceB_USDT;
+      
+      // Account for 0.2% fee per trade (0.6% total)
+      const profitBeforeFees = (finalUSDT - 1) * 100;
+      const profitAfterFees = profitBeforeFees - 0.6;
+      
+      if (profitAfterFees > 0.5) { // Minimum 0.5% profit after fees
+        const profitUSDT = maxArbAmount * (profitAfterFees / 100);
         
-        // Find pair3: currency2 -> base
-        const pair3Key = `${currency2}_${base}`;
-        const price3 = tickerMap.get(pair3Key);
-        if (!price3) continue;
-        
-        // Calculate arbitrage profit
-        // Start with 1 base, buy currency1, sell for currency2, sell for base
-        const step1 = 1 / price1; // base -> currency1
-        const step2 = step1 * price2; // currency1 -> currency2
-        const step3 = step2 * price3; // currency2 -> base
-        const profit = (step3 - 1) * 100 - 0.6; // Subtract ~0.6% for fees (0.2% * 3)
-        
-        if (profit > 0.5) {
-          opportunities.push({
-            route: [base, currency1, currency2, base],
-            profit,
-            prices: [price1, price2, price3],
-          });
-        }
+        opportunities.push({
+          route: ['USDT', currencyA, currencyB, 'USDT'],
+          pairs: [ticker1.currency_pair, ticker2.currency_pair, pairB_USDT],
+          sides: ['buy', 'sell', 'sell'],
+          prices: [priceA_USDT, priceA_B, priceB_USDT],
+          amounts: [maxArbAmount / priceA_USDT, 0, 0], // Will calculate dynamically
+          profit: profitAfterFees,
+          profitUSDT,
+        });
       }
     }
   }
   
   opportunities.sort((a, b) => b.profit - a.profit);
   
+  let executedCount = 0;
+  let totalProfit = 0;
+  
+  // Execute best arbitrage opportunity if profit > 1%
   if (opportunities.length > 0) {
-    await log('info', 'ARBITRAGE', `Found ${opportunities.length} arbitrage opportunities`, opportunities.slice(0, 3));
+    const best = opportunities[0];
     
-    // Log to opportunity table
-    for (const opp of opportunities.slice(0, 5)) {
-      await supabase.from('opportunity_log').insert({
-        opportunity_type: 'triangular_arbitrage',
-        symbol: opp.route.join(' → '),
-        expected_edge: opp.profit,
-        confidence: Math.min(95, 50 + opp.profit * 10),
-        action_taken: 'logged',
-        result: 'pending',
-      });
+    await log('info', 'ARBITRAGE', `Found ${opportunities.length} opportunities. Best: ${best.route.join('→')} +${best.profit.toFixed(2)}%`);
+    
+    // Only execute if profit is significant (>1%) and we haven't done too many
+    if (best.profit > 1.0 && executedCount < 2) {
+      await log('info', 'ARBITRAGE', `Executing arbitrage: ${best.route.join('→')}`, best);
+      
+      try {
+        // Step 1: Buy currency A with USDT
+        const step1Amount = (maxArbAmount / best.prices[0]).toFixed(6);
+        const step1Result = await executeArbitrageTrade(
+          best.pairs[0], 
+          'buy', 
+          step1Amount, 
+          best.prices[0].toString()
+        );
+        
+        if (!step1Result.success) {
+          await log('error', 'ARBITRAGE', `Step 1 failed: ${step1Result.error}`);
+          await supabase.from('opportunity_log').insert({
+            opportunity_type: 'triangular_arbitrage',
+            symbol: best.route.join(' → '),
+            expected_edge: best.profit,
+            confidence: 80,
+            action_taken: 'executed',
+            result: `failed_step1: ${step1Result.error}`,
+          });
+        } else {
+          await log('info', 'ARBITRAGE', `Step 1 success: Bought ${step1Amount} ${best.route[1]}`);
+          
+          // Wait a bit for order to settle
+          await new Promise(r => setTimeout(r, 500));
+          
+          // Get actual balance of currency A
+          const updatedBalances = await gateRequest('/spot/accounts');
+          const currencyABalance = updatedBalances.find((b: { currency: string }) => b.currency === best.route[1]);
+          const actualAmountA = currencyABalance ? parseFloat(currencyABalance.available) : 0;
+          
+          if (actualAmountA > 0) {
+            // Step 2: Sell currency A for currency B
+            const step2Amount = actualAmountA.toFixed(6);
+            const step2Result = await executeArbitrageTrade(
+              best.pairs[1],
+              'sell',
+              step2Amount,
+              best.prices[1].toString()
+            );
+            
+            if (!step2Result.success) {
+              await log('error', 'ARBITRAGE', `Step 2 failed: ${step2Result.error}`);
+              // Try to recover by selling A back to USDT
+              await executeArbitrageTrade(best.pairs[0], 'sell', step2Amount, (best.prices[0] * 0.99).toString());
+            } else {
+              await log('info', 'ARBITRAGE', `Step 2 success: Sold ${step2Amount} ${best.route[1]} for ${best.route[2]}`);
+              
+              await new Promise(r => setTimeout(r, 500));
+              
+              // Get balance of currency B
+              const balancesAfterStep2 = await gateRequest('/spot/accounts');
+              const currencyBBalance = balancesAfterStep2.find((b: { currency: string }) => b.currency === best.route[2]);
+              const actualAmountB = currencyBBalance ? parseFloat(currencyBBalance.available) : 0;
+              
+              if (actualAmountB > 0) {
+                // Step 3: Sell currency B for USDT
+                const step3Amount = actualAmountB.toFixed(6);
+                const step3Result = await executeArbitrageTrade(
+                  best.pairs[2],
+                  'sell',
+                  step3Amount,
+                  best.prices[2].toString()
+                );
+                
+                if (step3Result.success) {
+                  executedCount++;
+                  totalProfit += best.profitUSDT;
+                  
+                  await log('info', 'ARBITRAGE', `✅ Arbitrage complete! Estimated profit: $${best.profitUSDT.toFixed(2)}`);
+                  
+                  // Record successful trade
+                  await supabase.from('trade_history').insert({
+                    order_id: `arb-${step1Result.orderId}-${step3Result.orderId}`,
+                    symbol: best.route.join('→'),
+                    side: 'arbitrage',
+                    type: 'triangular_arbitrage',
+                    amount: maxArbAmount,
+                    price: best.profit,
+                    expected_edge: best.profit,
+                    status: 'filled',
+                  });
+                  
+                  await supabase.from('opportunity_log').insert({
+                    opportunity_type: 'triangular_arbitrage',
+                    symbol: best.route.join(' → '),
+                    expected_edge: best.profit,
+                    confidence: 90,
+                    action_taken: 'executed',
+                    result: `success: +$${best.profitUSDT.toFixed(2)}`,
+                  });
+                } else {
+                  await log('error', 'ARBITRAGE', `Step 3 failed: ${step3Result.error}`);
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        await log('error', 'ARBITRAGE', `Arbitrage execution error: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
+    } else {
+      // Just log the opportunities without executing
+      for (const opp of opportunities.slice(0, 5)) {
+        await supabase.from('opportunity_log').insert({
+          opportunity_type: 'triangular_arbitrage',
+          symbol: opp.route.join(' → '),
+          expected_edge: opp.profit,
+          confidence: Math.min(95, 50 + opp.profit * 10),
+          action_taken: opp.profit > 1.0 ? 'skipped_limit' : 'logged',
+          result: 'pending',
+        });
+      }
     }
   }
   
-  return { scanned: tickers.length, found: opportunities.length, best: opportunities[0] };
+  return { 
+    scanned: tickers.length, 
+    found: opportunities.length, 
+    executed: executedCount,
+    profit: totalProfit,
+    best: opportunities[0] 
+  };
 }
 
 // ==================== MAIN ORCHESTRATOR ====================
@@ -412,7 +602,7 @@ serve(async (req) => {
       runTradingArm(settings),
       settings.autoLiquidate !== false ? runLiquidationArm() : Promise.resolve({ liquidated: 0 }),
       runRewardsArm(),
-      runArbitrageArm(),
+      runArbitrageArm(settings),
     ]);
     
     // Get final balance
