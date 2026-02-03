@@ -14,7 +14,189 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      opportunity_log: {
+        Row: {
+          action_taken: string | null
+          confidence: number | null
+          created_at: string
+          expected_edge: number | null
+          id: string
+          opportunity_type: string
+          result: string | null
+          symbol: string
+        }
+        Insert: {
+          action_taken?: string | null
+          confidence?: number | null
+          created_at?: string
+          expected_edge?: number | null
+          id?: string
+          opportunity_type: string
+          result?: string | null
+          symbol: string
+        }
+        Update: {
+          action_taken?: string | null
+          confidence?: number | null
+          created_at?: string
+          expected_edge?: number | null
+          id?: string
+          opportunity_type?: string
+          result?: string | null
+          symbol?: string
+        }
+        Relationships: []
+      }
+      rewards_collected: {
+        Row: {
+          collected_at: string | null
+          created_at: string
+          details: Json | null
+          id: string
+          name: string | null
+          reward_type: string
+          value_usdt: number | null
+        }
+        Insert: {
+          collected_at?: string | null
+          created_at?: string
+          details?: Json | null
+          id?: string
+          name?: string | null
+          reward_type: string
+          value_usdt?: number | null
+        }
+        Update: {
+          collected_at?: string | null
+          created_at?: string
+          details?: Json | null
+          id?: string
+          name?: string | null
+          reward_type?: string
+          value_usdt?: number | null
+        }
+        Relationships: []
+      }
+      system_log: {
+        Row: {
+          component: string
+          created_at: string
+          details: Json | null
+          id: string
+          level: string
+          message: string
+        }
+        Insert: {
+          component: string
+          created_at?: string
+          details?: Json | null
+          id?: string
+          level?: string
+          message: string
+        }
+        Update: {
+          component?: string
+          created_at?: string
+          details?: Json | null
+          id?: string
+          level?: string
+          message?: string
+        }
+        Relationships: []
+      }
+      trade_history: {
+        Row: {
+          actual_pnl: number | null
+          amount: number | null
+          created_at: string
+          error: string | null
+          executed_at: string | null
+          expected_edge: number | null
+          id: string
+          order_id: string | null
+          price: number | null
+          side: string
+          status: string
+          symbol: string
+          type: string
+        }
+        Insert: {
+          actual_pnl?: number | null
+          amount?: number | null
+          created_at?: string
+          error?: string | null
+          executed_at?: string | null
+          expected_edge?: number | null
+          id?: string
+          order_id?: string | null
+          price?: number | null
+          side: string
+          status?: string
+          symbol: string
+          type: string
+        }
+        Update: {
+          actual_pnl?: number | null
+          amount?: number | null
+          created_at?: string
+          error?: string | null
+          executed_at?: string | null
+          expected_edge?: number | null
+          id?: string
+          order_id?: string | null
+          price?: number | null
+          side?: string
+          status?: string
+          symbol?: string
+          type?: string
+        }
+        Relationships: []
+      }
+      trading_system_state: {
+        Row: {
+          created_at: string
+          current_balance: number | null
+          id: string
+          is_active: boolean
+          last_heartbeat: string | null
+          settings: Json | null
+          started_at: string | null
+          successful_trades: number | null
+          total_cycles: number | null
+          total_pnl: number | null
+          total_trades: number | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          current_balance?: number | null
+          id?: string
+          is_active?: boolean
+          last_heartbeat?: string | null
+          settings?: Json | null
+          started_at?: string | null
+          successful_trades?: number | null
+          total_cycles?: number | null
+          total_pnl?: number | null
+          total_trades?: number | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          current_balance?: number | null
+          id?: string
+          is_active?: boolean
+          last_heartbeat?: string | null
+          settings?: Json | null
+          started_at?: string | null
+          successful_trades?: number | null
+          total_cycles?: number | null
+          total_pnl?: number | null
+          total_trades?: number | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

@@ -7,7 +7,8 @@ import {
   MarketOverview,
   OpportunitiesPanel,
   BacktestPanel,
-  ContinuousTradingPanel
+  ContinuousTradingPanel,
+  AutonomousControlPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -48,16 +49,16 @@ const Index = () => {
         </div>
         
         <TabsContent value="dashboard" className="mt-0">
-          {/* Mobile: Single column, Tablet: 2 columns, Desktop: 3 columns */}
+          {/* Mobile: Single column, Tablet: 2 columns, Desktop: 4 columns */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 sm:gap-4 pb-4">
             
-            {/* Continuous Trading Panel - Primary */}
-            <div className="xl:col-span-3 h-auto min-h-[400px]">
-              <ContinuousTradingPanel />
+            {/* Autonomous Control Panel - PRIMARY */}
+            <div className="xl:col-span-3 h-auto min-h-[450px]">
+              <AutonomousControlPanel />
             </div>
             
             {/* Treasury Panel */}
-            <div className="xl:col-span-3 h-64 sm:h-80 xl:h-auto xl:row-span-1">
+            <div className="xl:col-span-3 h-auto min-h-[350px]">
               <TreasuryPanel />
             </div>
             
