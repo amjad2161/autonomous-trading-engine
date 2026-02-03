@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
   Settings, 
   Key, 
@@ -14,7 +15,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   Shield,
-  Server
+  Server,
+  Cloud,
+  HardDrive
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -27,14 +30,15 @@ export function SettingsPanel() {
   const [isLoading, setIsLoading] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [lastVerified, setLastVerified] = useState<string | null>(null);
+  const [cloudSynced, setCloudSynced] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
 
-  async function handleUpdateCredentials() {
+  async function handleUpdateCredentials(saveToCloud: boolean = false) {
     if (!apiKey.trim() || !apiSecret.trim()) {
       toast.error("נא להזין API Key ו-Secret");
       return;
     }
 
-    // Validate format
     if (apiKey.length < 10 || apiSecret.length < 20) {
       toast.error("פורמט לא תקין - בדוק שהמפתחות נכונים");
       return;
@@ -42,7 +46,7 @@ export function SettingsPanel() {
 
     setIsLoading(true);
     try {
-      // First verify the credentials work
+      // Verify credentials
       const verifyResponse = await supabase.functions.invoke('gate-api', {
         body: {
           endpoint: '/spot/accounts',
@@ -56,22 +60,48 @@ export function SettingsPanel() {
         throw new Error('Failed to verify credentials');
       }
 
-      // Store in localStorage for local mode
+      // Store locally
       localStorage.setItem('gate_api_key', apiKey);
       localStorage.setItem('gate_api_secret', apiSecret);
       
-      toast.success("המפתחות עודכנו והאומתו בהצלחה!");
-      setLastVerified(new Date().toISOString());
+      if (saveToCloud) {
+        // Sync to cloud for autonomous 24/7 operation
+        await syncToCloud(apiKey, apiSecret);
+      }
       
-      // Clear inputs after success
+      toast.success(saveToCloud ? "המפתחות עודכנו בענן ומקומית!" : "המפתחות עודכנו מקומית!");
+      setLastVerified(new Date().toISOString());
       setApiKey("");
       setApiSecret("");
       
     } catch (error) {
       console.error('Error updating credentials:', error);
-      toast.error("שגיאה באימות המפתחות - בדוק שהם נכונים");
+      toast.error("שגיאה באימות המפתחות");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function syncToCloud(key: string, secret: string) {
+    setIsSyncingCloud(true);
+    try {
+      // Call edge function to update cloud secrets
+      const response = await supabase.functions.invoke('update-secrets', {
+        body: { apiKey: key, apiSecret: secret },
+      });
+      
+      if (response.error) {
+        throw response.error;
+      }
+      
+      setCloudSynced(true);
+      toast.success("הסודות סונכרנו לענן בהצלחה!");
+    } catch (error) {
+      console.error('Cloud sync error:', error);
+      // Even if cloud sync fails, local storage works
+      toast.warning("סנכרון לענן נכשל - המפתחות נשמרו מקומית");
+    } finally {
+      setIsSyncingCloud(false);
     }
   }
 
@@ -109,11 +139,37 @@ export function SettingsPanel() {
     }
   }
 
+  async function handleVerifyCloud() {
+    setIsVerifying(true);
+    try {
+      const response = await supabase.functions.invoke('gate-api', {
+        body: {
+          endpoint: '/spot/accounts',
+          method: 'GET',
+          useCloudSecrets: true,
+        },
+      });
+
+      if (response.error) {
+        toast.error("הסודות בענן לא תקינים");
+        setCloudSynced(false);
+      } else {
+        toast.success("הסודות בענן תקינים!");
+        setCloudSynced(true);
+        setLastVerified(new Date().toISOString());
+      }
+    } catch (error) {
+      toast.error("שגיאה באימות ענן");
+    } finally {
+      setIsVerifying(false);
+    }
+  }
+
   function handleClearCredentials() {
     localStorage.removeItem('gate_api_key');
     localStorage.removeItem('gate_api_secret');
     setLastVerified(null);
-    toast.success("המפתחות נמחקו");
+    toast.success("המפתחות המקומיים נמחקו");
   }
 
   const hasStoredCredentials = !!localStorage.getItem('gate_api_key');
@@ -136,16 +192,23 @@ export function SettingsPanel() {
       </CardHeader>
       
       <CardContent className="space-y-4">
-        {/* Current Status */}
+        {/* Status */}
         <div className="p-3 bg-muted/30 rounded-lg space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm text-muted-foreground flex items-center gap-1">
               <Server className="h-3 w-3" />
               סטטוס חיבור
             </span>
-            <Badge variant={hasStoredCredentials ? "default" : "secondary"}>
-              {hasStoredCredentials ? "מחובר" : "לא מחובר"}
-            </Badge>
+            <div className="flex gap-2">
+              <Badge variant={hasStoredCredentials ? "default" : "secondary"} className="text-xs">
+                <HardDrive className="h-3 w-3 mr-1" />
+                {hasStoredCredentials ? "מקומי ✓" : "מקומי ✗"}
+              </Badge>
+              <Badge variant={cloudSynced ? "default" : "secondary"} className="text-xs">
+                <Cloud className="h-3 w-3 mr-1" />
+                {cloudSynced ? "ענן ✓" : "ענן ✗"}
+              </Badge>
+            </div>
           </div>
           
           {lastVerified && (
@@ -155,19 +218,29 @@ export function SettingsPanel() {
           )}
         </div>
 
-        {/* Verify Existing */}
-        {hasStoredCredentials && (
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleVerifyExisting}
-              disabled={isVerifying}
-              className="flex-1"
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${isVerifying ? 'animate-spin' : ''}`} />
-              בדוק חיבור
-            </Button>
+        {/* Verify Buttons */}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleVerifyExisting}
+            disabled={isVerifying || !hasStoredCredentials}
+            className="flex-1"
+          >
+            <HardDrive className={`h-4 w-4 mr-2 ${isVerifying ? 'animate-pulse' : ''}`} />
+            בדוק מקומי
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleVerifyCloud}
+            disabled={isVerifying}
+            className="flex-1"
+          >
+            <Cloud className={`h-4 w-4 mr-2 ${isVerifying ? 'animate-pulse' : ''}`} />
+            בדוק ענן
+          </Button>
+          {hasStoredCredentials && (
             <Button
               variant="ghost"
               size="sm"
@@ -176,8 +249,8 @@ export function SettingsPanel() {
             >
               מחק
             </Button>
-          </div>
-        )}
+          )}
+        </div>
 
         <Separator />
 
@@ -236,23 +309,48 @@ export function SettingsPanel() {
             </div>
           </div>
 
-          <Button
-            onClick={handleUpdateCredentials}
-            disabled={isLoading || !apiKey.trim() || !apiSecret.trim()}
-            className="w-full"
-          >
-            {isLoading ? (
-              <>
+          {/* Save Buttons */}
+          <div className="flex gap-2">
+            <Button
+              onClick={() => handleUpdateCredentials(false)}
+              disabled={isLoading || !apiKey.trim() || !apiSecret.trim()}
+              variant="outline"
+              className="flex-1"
+            >
+              {isLoading && !isSyncingCloud ? (
                 <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                מאמת...
-              </>
-            ) : (
-              <>
-                <Shield className="h-4 w-4 mr-2" />
-                {hasStoredCredentials ? "עדכן מפתחות" : "שמור מפתחות"}
-              </>
-            )}
-          </Button>
+              ) : (
+                <HardDrive className="h-4 w-4 mr-2" />
+              )}
+              שמור מקומי
+            </Button>
+            <Button
+              onClick={() => handleUpdateCredentials(true)}
+              disabled={isLoading || !apiKey.trim() || !apiSecret.trim()}
+              className="flex-1"
+            >
+              {isSyncingCloud ? (
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Cloud className="h-4 w-4 mr-2" />
+              )}
+              שמור + סנכרן ענן
+            </Button>
+          </div>
+        </div>
+
+        {/* Info */}
+        <div className="p-3 bg-primary/10 border border-primary/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <Cloud className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+            <div className="text-xs text-primary space-y-1">
+              <p className="font-medium">מצב עבודה:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
+                <li><strong>מקומי</strong> - עובד כשהדפדפן פתוח</li>
+                <li><strong>ענן</strong> - עובד 24/7 אוטונומית</li>
+              </ul>
+            </div>
+          </div>
         </div>
 
         {/* Security Note */}
@@ -262,7 +360,7 @@ export function SettingsPanel() {
             <div className="text-xs text-muted-foreground space-y-1">
               <p className="font-medium">הערות אבטחה:</p>
               <ul className="list-disc list-inside space-y-0.5">
-                <li>המפתחות נשמרים מקומית בדפדפן</li>
+                <li>הסודות בענן מוצפנים ומאובטחים</li>
                 <li>ודא שהמפתחות מוגבלים ל-Spot Trading בלבד</li>
                 <li>אל תשתף את המפתחות עם אף אחד</li>
               </ul>
