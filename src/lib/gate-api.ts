@@ -67,11 +67,13 @@ export async function getTotalBalance(): Promise<{ total: { amount: string; curr
 
 // Market data endpoints
 export async function getTickers(pairs?: string[]): Promise<Ticker[]> {
-  const params: Record<string, string> = {};
+  // Gate.io doesn't accept multiple pairs - fetch all and filter client-side
+  const allTickers = await callGateApi<Ticker[]>('/spot/tickers', 'GET', {});
+  
   if (pairs && pairs.length > 0) {
-    params.currency_pair = pairs.join(',');
+    return allTickers.filter(t => pairs.includes(t.currency_pair));
   }
-  return callGateApi<Ticker[]>('/spot/tickers', 'GET', params);
+  return allTickers;
 }
 
 export async function getOrderBook(pair: string, limit = 20): Promise<OrderBook> {
