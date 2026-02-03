@@ -10,7 +10,8 @@ import {
   ContinuousTradingPanel,
   AutonomousControlPanel,
   TradingChatPanel,
-  PerformanceDashboard
+  PerformanceDashboard,
+  CronJobSetup
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -40,6 +41,7 @@ const Index = () => {
           <TabsList>
             <TabsTrigger value="dashboard">דשבורד</TabsTrigger>
             <TabsTrigger value="performance">ביצועים</TabsTrigger>
+            <TabsTrigger value="cron">Cron 24/7</TabsTrigger>
             <TabsTrigger value="backtest">Backtesting</TabsTrigger>
           </TabsList>
           
@@ -95,6 +97,12 @@ const Index = () => {
         <TabsContent value="performance" className="mt-0">
           <div className="h-[calc(100vh-12rem)]">
             <PerformanceDashboard />
+          </div>
+        </TabsContent>
+        
+        <TabsContent value="cron" className="mt-0">
+          <div className="h-[calc(100vh-12rem)] max-w-2xl">
+            <CronJobSetup />
           </div>
         </TabsContent>
         
