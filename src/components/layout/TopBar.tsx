@@ -1,4 +1,4 @@
-import { Bell, RefreshCw, Wifi, WifiOff, Clock, Settings, LogOut } from "lucide-react";
+import { Bell, RefreshCw, Wifi, WifiOff, Clock, Settings, LogOut, Menu } from "lucide-react";
 import { useSpotBalances } from "@/hooks/useGateApi";
 import { formatUSDT } from "@/lib/gate-api";
 import { useCredentials } from "@/hooks/useCredentials";
@@ -10,7 +10,11 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 
-export function TopBar() {
+interface TopBarProps {
+  onMenuClick?: () => void;
+}
+
+export function TopBar({ onMenuClick }: TopBarProps) {
   const { data: balances, isLoading, isError, dataUpdatedAt } = useSpotBalances();
   const { clearCredentials, credentials } = useCredentials();
   
@@ -39,52 +43,60 @@ export function TopBar() {
     : 'Not connected';
 
   return (
-    <header className="h-14 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-4">
-      {/* Left: Connection Status */}
-      <div className="flex items-center gap-4">
+    <header className="h-14 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-2 sm:px-4">
+      {/* Left: Menu + Connection Status */}
+      <div className="flex items-center gap-2 sm:gap-4">
+        {/* Mobile menu button */}
+        <button 
+          onClick={onMenuClick}
+          className="lg:hidden p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        
         <div className="flex items-center gap-2">
           {isError ? (
             <>
               <WifiOff className="w-4 h-4 text-destructive" />
-              <span className="text-sm text-destructive">Disconnected</span>
+              <span className="text-sm text-destructive hidden sm:inline">Disconnected</span>
             </>
           ) : (
             <>
               <Wifi className="w-4 h-4 text-profit animate-pulse" />
-              <span className="text-sm text-muted-foreground">Gate.io</span>
+              <span className="text-sm text-muted-foreground hidden sm:inline">Gate.io</span>
             </>
           )}
         </div>
         
-        <div className="h-4 w-px bg-border" />
+        <div className="hidden sm:block h-4 w-px bg-border" />
         
-        <div className="flex items-center gap-2 text-muted-foreground">
+        <div className="hidden sm:flex items-center gap-2 text-muted-foreground">
           <Clock className="w-4 h-4" />
           <span className="text-sm font-mono">{lastUpdate}</span>
         </div>
       </div>
 
-      {/* Center: Quick Stats */}
-      <div className="flex items-center gap-6">
+      {/* Center: Quick Stats - responsive */}
+      <div className="flex items-center gap-2 sm:gap-6">
         <div className="text-center">
-          <p className="text-xs text-muted-foreground">USDT Balance</p>
-          <p className="font-mono text-lg font-semibold text-foreground">
+          <p className="text-[10px] sm:text-xs text-muted-foreground">USDT</p>
+          <p className="font-mono text-sm sm:text-lg font-semibold text-foreground">
             {isLoading ? '---' : formatUSDT(totalUSDT)}
           </p>
         </div>
         
-        <div className="h-8 w-px bg-border" />
+        <div className="hidden sm:block h-8 w-px bg-border" />
         
-        <div className="text-center">
+        <div className="hidden sm:block text-center">
           <p className="text-xs text-muted-foreground">Daily P&L</p>
           <p className="font-mono text-lg font-semibold text-profit">
             +$0.00
           </p>
         </div>
         
-        <div className="h-8 w-px bg-border" />
+        <div className="hidden md:block h-8 w-px bg-border" />
         
-        <div className="text-center">
+        <div className="hidden md:block text-center">
           <p className="text-xs text-muted-foreground">Open Positions</p>
           <p className="font-mono text-lg font-semibold text-foreground">
             0
@@ -93,11 +105,11 @@ export function TopBar() {
       </div>
 
       {/* Right: Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 sm:gap-2">
         <button className="p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
-          <RefreshCw className={`w-5 h-5 ${isLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-4 sm:w-5 h-4 sm:h-5 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
-        <button className="p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground relative">
+        <button className="hidden sm:block p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground relative">
           <Bell className="w-5 h-5" />
           <span className="absolute top-1 right-1 w-2 h-2 bg-profit rounded-full" />
         </button>
@@ -105,7 +117,7 @@ export function TopBar() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
-              <Settings className="w-5 h-5" />
+              <Settings className="w-4 sm:w-5 h-4 sm:h-5" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">

@@ -31,35 +31,37 @@ const Index = () => {
 
   return (
     <DashboardLayout>
-      <div className="grid grid-cols-12 gap-4 h-[calc(100vh-7rem)]">
-        {/* Left Column - Treasury & Risk */}
-        <div className="col-span-3 flex flex-col gap-4">
-          <div className="flex-1 min-h-0">
-            <TreasuryPanel />
-          </div>
-          <div className="h-80">
-            <RiskControlPanel />
-          </div>
+      {/* Mobile: Single column, Tablet: 2 columns, Desktop: 3 columns */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-3 sm:gap-4 pb-4">
+        
+        {/* Treasury Panel */}
+        <div className="xl:col-span-3 h-64 sm:h-80 xl:h-auto xl:row-span-1">
+          <TreasuryPanel />
         </div>
         
-        {/* Center Column - Positions & Opportunities */}
-        <div className="col-span-6 flex flex-col gap-4">
-          <div className="flex-1 min-h-0">
-            <PositionsPanel />
-          </div>
-          <div className="h-80">
-            <OpportunitiesPanel />
-          </div>
+        {/* Market Overview - Shows prominently on mobile */}
+        <div className="xl:col-span-3 xl:row-start-1 xl:col-start-10 h-64 sm:h-80 xl:h-auto">
+          <MarketOverview />
         </div>
         
-        {/* Right Column - Market & Activity */}
-        <div className="col-span-3 flex flex-col gap-4">
-          <div className="flex-1 min-h-0">
-            <MarketOverview />
-          </div>
-          <div className="h-80">
-            <ActivityLog />
-          </div>
+        {/* Positions Panel - Full width on tablet */}
+        <div className="md:col-span-2 xl:col-span-6 xl:row-start-1 xl:col-start-4 h-72 sm:h-96 xl:h-auto">
+          <PositionsPanel />
+        </div>
+        
+        {/* Risk Control */}
+        <div className="xl:col-span-3 h-64 sm:h-80">
+          <RiskControlPanel />
+        </div>
+        
+        {/* Opportunities */}
+        <div className="md:col-span-2 xl:col-span-6 h-64 sm:h-80">
+          <OpportunitiesPanel />
+        </div>
+        
+        {/* Activity Log */}
+        <div className="xl:col-span-3 h-64 sm:h-80">
+          <ActivityLog />
         </div>
       </div>
     </DashboardLayout>

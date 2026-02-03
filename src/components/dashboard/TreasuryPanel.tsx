@@ -29,11 +29,11 @@ export function TreasuryPanel() {
         <span className="text-xs text-muted-foreground">Auto-rebalance: ON</span>
       </div>
       
-      <div className="p-4 space-y-4 flex-1 overflow-auto">
+      <div className="p-3 sm:p-4 space-y-3 sm:space-y-4 flex-1 overflow-auto">
         {/* Total Portfolio Value */}
-        <div className="p-4 rounded-lg bg-muted/50 border border-border">
+        <div className="p-3 sm:p-4 rounded-lg bg-muted/50 border border-border">
           <p className="text-xs text-muted-foreground mb-1">Total Portfolio Value</p>
-          <p className="font-mono text-2xl font-bold text-foreground">
+          <p className="font-mono text-xl sm:text-2xl font-bold text-foreground">
             {balancesLoading ? '---' : formatUSDT(totalValue)}
           </p>
           <p className="text-xs text-profit mt-1">
