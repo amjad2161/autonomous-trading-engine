@@ -1,5 +1,5 @@
 import { Bell, RefreshCw, Wifi, WifiOff, Clock, Settings, LogOut, Menu } from "lucide-react";
-import { useSpotBalances } from "@/hooks/useGateApi";
+import { useSpotBalances, useTickers, useTotalPortfolioValue } from "@/hooks/useGateApi";
 import { formatUSDT } from "@/lib/gate-api";
 import { useCredentials } from "@/hooks/useCredentials";
 import {
@@ -16,12 +16,11 @@ interface TopBarProps {
 
 export function TopBar({ onMenuClick }: TopBarProps) {
   const { data: balances, isLoading, isError, dataUpdatedAt } = useSpotBalances();
+  const { data: tickers } = useTickers();
   const { clearCredentials, credentials } = useCredentials();
   
-  const usdtBalance = balances?.find(b => b.currency === 'USDT');
-  const totalUSDT = usdtBalance 
-    ? parseFloat(usdtBalance.available) + parseFloat(usdtBalance.locked)
-    : 0;
+  // Calculate total portfolio value (all assets converted to USDT)
+  const totalPortfolioValue = useTotalPortfolioValue(balances, tickers);
 
   const lastUpdate = dataUpdatedAt 
     ? new Date(dataUpdatedAt).toLocaleTimeString('en-US', { 
@@ -79,9 +78,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
       {/* Center: Quick Stats - responsive */}
       <div className="flex items-center gap-2 sm:gap-6">
         <div className="text-center">
-          <p className="text-[10px] sm:text-xs text-muted-foreground">USDT</p>
+          <p className="text-[10px] sm:text-xs text-muted-foreground">Portfolio</p>
           <p className="font-mono text-sm sm:text-lg font-semibold text-foreground">
-            {isLoading ? '---' : formatUSDT(totalUSDT)}
+            {isLoading ? '---' : formatUSDT(totalPortfolioValue)}
           </p>
         </div>
         
