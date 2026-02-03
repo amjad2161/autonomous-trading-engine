@@ -39,9 +39,9 @@ const CONFIG = {
   SCAN_INTERVAL_MS: 3000, // Faster scanning
   IDLE_THRESHOLD_MS: 5 * 60 * 1000,
   
-  // Module 5: Signal Validation - RELAXED for more trades
-  MIN_REWARD_RISK: 2.0,   // R:R >= 2.0 (was 2.5)
-  MAX_FEE_SLIPPAGE_RATIO: 0.18, // Slightly relaxed
+  // Module 5: Signal Validation - VERY AGGRESSIVE for maximum trades
+  MIN_REWARD_RISK: 0.5,   // R:R >= 0.5 (was 2.0) - VERY LOW
+  MAX_FEE_SLIPPAGE_RATIO: 0.25, // More relaxed
   
   // Module 6: Execution
   LIMIT_TTL_MS: 3000,     // Faster TTL
