@@ -1,12 +1,13 @@
-import { BarChart3, TrendingUp, TrendingDown, Activity } from "lucide-react";
-import { useTickers } from "@/hooks/useGateApi";
+import { BarChart3, TrendingUp, TrendingDown, Wifi, WifiOff } from "lucide-react";
+import { useRealtimeTickers, useWebSocketStatus } from "@/hooks/useGateWebSocket";
 import { formatUSDT, formatPercentage } from "@/lib/gate-api";
 
 // Top pairs to monitor
 const TOP_PAIRS = ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'DOGE_USDT', 'ADA_USDT'];
 
 export function MarketOverview() {
-  const { data: tickers, isLoading } = useTickers(TOP_PAIRS);
+  const { data: tickers, isLoading } = useRealtimeTickers(TOP_PAIRS);
+  const wsStatus = useWebSocketStatus();
 
   const sortedTickers = tickers
     ?.filter(t => TOP_PAIRS.includes(t.currency_pair))
@@ -19,8 +20,17 @@ export function MarketOverview() {
         <div className="flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-primary" />
           <h2 className="font-semibold text-sm">Market Overview</h2>
+          {wsStatus === 'connected' ? (
+            <Wifi className="w-3 h-3 text-profit animate-pulse" />
+          ) : wsStatus === 'connecting' ? (
+            <Wifi className="w-3 h-3 text-warning animate-pulse" />
+          ) : (
+            <WifiOff className="w-3 h-3 text-muted-foreground" />
+          )}
         </div>
-        <span className="text-xs text-muted-foreground">Top pairs</span>
+        <span className="text-xs text-muted-foreground">
+          {wsStatus === 'connected' ? 'Live' : wsStatus === 'connecting' ? 'Connecting...' : 'Top pairs'}
+        </span>
       </div>
       
       <div className="flex-1 overflow-auto">
