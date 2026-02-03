@@ -152,3 +152,45 @@ export function useTotalPortfolioValue(balances?: SpotBalance[], tickers?: Ticke
   
   return total;
 }
+
+// Calculate Daily P&L based on 24h price changes
+export function useDailyPnL(balances?: SpotBalance[], tickers?: Ticker[]) {
+  if (!balances || !tickers) return { amount: 0, percent: 0 };
+  
+  let totalPnL = 0;
+  let totalCurrentValue = 0;
+  
+  for (const balance of balances) {
+    const available = parseFloat(balance.available);
+    const locked = parseFloat(balance.locked);
+    const amount = available + locked;
+    
+    if (amount === 0) continue;
+    
+    if (balance.currency === 'USDT') {
+      // USDT doesn't change in value
+      totalCurrentValue += amount;
+    } else {
+      const ticker = tickers.find(t => t.currency_pair === `${balance.currency}_USDT`);
+      if (ticker) {
+        const currentPrice = parseFloat(ticker.last);
+        const changePercent = parseFloat(ticker.change_percentage);
+        const currentValue = amount * currentPrice;
+        
+        // Calculate value 24h ago: currentValue / (1 + changePercent/100)
+        const value24hAgo = currentValue / (1 + changePercent / 100);
+        const pnl = currentValue - value24hAgo;
+        
+        totalPnL += pnl;
+        totalCurrentValue += currentValue;
+      }
+    }
+  }
+  
+  const pnlPercent = totalCurrentValue > 0 ? (totalPnL / (totalCurrentValue - totalPnL)) * 100 : 0;
+  
+  return {
+    amount: totalPnL,
+    percent: pnlPercent,
+  };
+}

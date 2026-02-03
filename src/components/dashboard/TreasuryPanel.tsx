@@ -1,5 +1,5 @@
-import { Wallet, Lock, TrendingUp, PiggyBank, AlertCircle } from "lucide-react";
-import { useSpotBalances, useTickers, useTotalPortfolioValue, useUSDTBalance } from "@/hooks/useGateApi";
+import { Wallet, Lock, TrendingUp, TrendingDown, PiggyBank, AlertCircle } from "lucide-react";
+import { useSpotBalances, useTickers, useTotalPortfolioValue, useUSDTBalance, useDailyPnL } from "@/hooks/useGateApi";
 import { formatUSDT, formatCrypto, formatPercentage } from "@/lib/gate-api";
 
 export function TreasuryPanel() {
@@ -8,6 +8,7 @@ export function TreasuryPanel() {
   
   const usdtBalance = useUSDTBalance(balances);
   const totalValue = useTotalPortfolioValue(balances, tickers);
+  const dailyPnL = useDailyPnL(balances, tickers);
   
   // Filter balances with value > 0
   const activeBalances = balances?.filter(b => {
@@ -36,8 +37,13 @@ export function TreasuryPanel() {
           <p className="font-mono text-xl sm:text-2xl font-bold text-foreground">
             {balancesLoading ? '---' : formatUSDT(totalValue)}
           </p>
-          <p className="text-xs text-profit mt-1">
-            +$0.00 (0.00%) today
+          <p className={`text-xs mt-1 flex items-center gap-1 ${dailyPnL.amount >= 0 ? 'text-profit' : 'text-destructive'}`}>
+            {dailyPnL.amount >= 0 ? (
+              <TrendingUp className="w-3 h-3" />
+            ) : (
+              <TrendingDown className="w-3 h-3" />
+            )}
+            {dailyPnL.amount >= 0 ? '+' : ''}{formatUSDT(dailyPnL.amount)} ({formatPercentage(dailyPnL.percent)}) today
           </p>
         </div>
 
