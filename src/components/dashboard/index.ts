@@ -12,3 +12,6 @@ export { TradingChatPanel } from "./TradingChatPanel";
 export { PerformanceDashboard } from "./PerformanceDashboard";
 export { CronJobSetup } from "./CronJobSetup";
 export { TickScalpingPanel } from "./TickScalpingPanel";
+export { MasterControlPanel } from "./MasterControlPanel";
+export { AdvancedAnalytics } from "./AdvancedAnalytics";
+export { TradeHistoryTable } from "./TradeHistoryTable";
