@@ -16,3 +16,4 @@ export { MasterControlPanel } from "./MasterControlPanel";
 export { AdvancedAnalytics } from "./AdvancedAnalytics";
 export { TradeHistoryTable } from "./TradeHistoryTable";
 export { HyperEnginePanel } from "./HyperEnginePanel";
+export { SettingsPanel } from "./SettingsPanel";

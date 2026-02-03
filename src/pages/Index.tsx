@@ -16,7 +16,8 @@ import {
   MasterControlPanel,
   AdvancedAnalytics,
   TradeHistoryTable,
-  HyperEnginePanel
+  HyperEnginePanel,
+  SettingsPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -63,6 +64,9 @@ const Index = () => {
             <TabsTrigger value="backtest" className="flex items-center gap-1">
               <FlaskConical className="h-3 w-3" />
               Backtest
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="flex items-center gap-1">
+              ⚙️ הגדרות
             </TabsTrigger>
           </TabsList>
           
@@ -159,6 +163,13 @@ const Index = () => {
         <TabsContent value="backtest" className="mt-0">
           <div className="h-[calc(100vh-12rem)]">
             <BacktestPanel />
+          </div>
+        </TabsContent>
+
+        {/* Settings Tab */}
+        <TabsContent value="settings" className="mt-0">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-w-4xl">
+            <SettingsPanel />
           </div>
         </TabsContent>
       </Tabs>
