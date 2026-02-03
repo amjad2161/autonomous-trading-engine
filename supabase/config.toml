@@ -38,3 +38,6 @@ verify_jwt = false
 
 [functions.micro-scalper]
 verify_jwt = false
+
+[functions.ultimate-trader]
+verify_jwt = false
