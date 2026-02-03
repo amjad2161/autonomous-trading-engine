@@ -11,12 +11,13 @@ import {
   AutonomousControlPanel,
   TradingChatPanel,
   PerformanceDashboard,
-  CronJobSetup
+  CronJobSetup,
+  TickScalpingPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Server } from "lucide-react";
+import { Server, Zap } from "lucide-react";
 
 const Index = () => {
   const { isLoading, isServerMode } = useCredentials();
@@ -40,6 +41,10 @@ const Index = () => {
         <div className="flex items-center justify-between mb-4">
           <TabsList>
             <TabsTrigger value="dashboard">דשבורד</TabsTrigger>
+            <TabsTrigger value="scalping" className="flex items-center gap-1">
+              <Zap className="h-3 w-3" />
+              Tick Scalping
+            </TabsTrigger>
             <TabsTrigger value="performance">ביצועים</TabsTrigger>
             <TabsTrigger value="cron">Cron 24/7</TabsTrigger>
             <TabsTrigger value="backtest">Backtesting</TabsTrigger>
@@ -89,6 +94,16 @@ const Index = () => {
             
             {/* Activity Log */}
             <div className="xl:col-span-3 h-64 sm:h-80">
+              <ActivityLog />
+            </div>
+          </div>
+        </TabsContent>
+        
+        <TabsContent value="scalping" className="mt-0">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-12rem)]">
+            <TickScalpingPanel />
+            <div className="grid grid-rows-2 gap-4">
+              <PositionsPanel />
               <ActivityLog />
             </div>
           </div>

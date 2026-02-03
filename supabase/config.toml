@@ -32,3 +32,6 @@ verify_jwt = false
 
 [functions.position-manager]
 verify_jwt = false
+
+[functions.tick-processor]
+verify_jwt = false
