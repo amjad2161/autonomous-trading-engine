@@ -70,15 +70,125 @@ async function getState() {
   return data;
 }
 
-// ==================== TRADING ARM ====================
+// ==================== SMART SCALPING ARM ====================
+// Focus on quick scalps with clear entry/exit, not hold and liquidate
 async function runTradingArm(settings: Record<string, unknown>) {
-  await log('info', 'TRADING', 'Starting trading scan...');
+  await log('info', 'TRADING', 'Starting smart scalping scan...');
   
   const tickers = await gateRequest('/spot/tickers');
   const opportunities = [];
-  const MIN_VOLUME = 50000;
-  const minEdge = (settings.minEdge as number) || 2;
+  const MIN_VOLUME = 100000; // Higher volume for better execution
+  const minEdge = (settings.minEdge as number) || 1.5;
   
+  // Get current positions to avoid overbuying
+  const balances = await gateRequest('/spot/accounts');
+  const holdings = new Map<string, number>(balances.map((b: { currency: string; available: string }) => 
+    [b.currency, parseFloat(b.available)]
+  ));
+  const usdtBalance = holdings.get('USDT') || 0;
+  
+  // First: Check if we have positions that reached take-profit or stop-loss
+  const exitResults = { sold: 0, profit: 0 };
+  
+  for (const [currency, amount] of holdings.entries()) {
+    if (currency === 'USDT' || amount <= 0) continue;
+    
+    const pair = `${currency}_USDT`;
+    const ticker = tickers.find((t: { currency_pair: string }) => t.currency_pair === pair);
+    if (!ticker) continue;
+    
+    const currentPrice = parseFloat(ticker.last);
+    const bid = parseFloat(ticker.highest_bid);
+    const change24h = parseFloat(ticker.change_percentage);
+    const value = amount * currentPrice;
+    
+    // Skip tiny balances
+    if (value < 1) continue;
+    
+    // Check recent trade history for entry price
+    const { data: recentTrades } = await supabase
+      .from('trade_history')
+      .select('*')
+      .eq('symbol', pair.replace('_', '/'))
+      .eq('side', 'buy')
+      .order('executed_at', { ascending: false })
+      .limit(1);
+    
+    const entryPrice = recentTrades?.[0]?.price || currentPrice;
+    const pnlPercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+    
+    // EXIT CONDITIONS:
+    // 1. Take Profit: +2% profit
+    // 2. Stop Loss: -1.5% loss
+    // 3. Time Exit: if momentum reversed (was +10%, now < +5%)
+    
+    const shouldTakeProfit = pnlPercent >= 2;
+    const shouldStopLoss = pnlPercent <= -1.5;
+    const momentumReversed = change24h < 5 && entryPrice > 0;
+    
+    if (shouldTakeProfit || shouldStopLoss || (momentumReversed && value > 5)) {
+      const reason = shouldTakeProfit ? 'take_profit' : (shouldStopLoss ? 'stop_loss' : 'momentum_exit');
+      
+      try {
+        const order = await gateRequest('/spot/orders', 'POST', {}, {
+          currency_pair: pair,
+          side: 'sell',
+          amount: amount.toFixed(6),
+          price: bid.toString(),
+          type: 'limit',
+          time_in_force: 'ioc',
+        });
+        
+        if (order.id) {
+          const realizedPnL = (bid - entryPrice) * amount;
+          exitResults.sold++;
+          exitResults.profit += realizedPnL;
+          
+          await supabase.from('trade_history').insert({
+            order_id: order.id,
+            symbol: pair.replace('_', '/'),
+            side: 'sell',
+            type: reason,
+            amount: amount,
+            price: bid,
+            expected_edge: pnlPercent,
+            actual_pnl: realizedPnL,
+            status: 'filled',
+          });
+          
+          await log('info', 'TRADING', `${reason.toUpperCase()}: Sold ${currency} at ${pnlPercent.toFixed(2)}% | P&L: $${realizedPnL.toFixed(2)}`);
+        }
+      } catch (err) {
+        await log('error', 'TRADING', `Exit failed for ${currency}`, { error: err instanceof Error ? err.message : 'Unknown' });
+      }
+      
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+  
+  // If we sold positions, update the balance
+  if (exitResults.sold > 0) {
+    const state = await getState();
+    if (state) {
+      await updateState({
+        total_pnl: (state.total_pnl || 0) + exitResults.profit,
+      });
+    }
+  }
+  
+  // NEW ENTRY CONDITIONS - Only enter if we have capacity and good setups
+  const maxPositions = 3;
+  const currentPositions = Array.from(holdings.entries()).filter(
+    ([curr, amt]: [string, number]) => curr !== 'USDT' && amt * 
+      parseFloat(tickers.find((t: { currency_pair: string }) => t.currency_pair === `${curr}_USDT`)?.last || '0') > 5
+  ).length;
+  
+  if (currentPositions >= maxPositions) {
+    await log('info', 'TRADING', `Max positions reached (${currentPositions}/${maxPositions}), waiting for exits`);
+    return { scanned: tickers.length, found: 0, executed: 0, successful: exitResults.sold, exitProfit: exitResults.profit };
+  }
+  
+  // Find SCALP opportunities - quick in-and-out trades
   for (const ticker of tickers) {
     const volume = parseFloat(ticker.quote_volume);
     if (volume < MIN_VOLUME) continue;
@@ -88,46 +198,73 @@ async function runTradingArm(settings: Record<string, unknown>) {
     const bid = parseFloat(ticker.highest_bid);
     const ask = parseFloat(ticker.lowest_ask);
     const spread = ((ask - bid) / last) * 100;
+    const high = parseFloat(ticker.high_24h);
+    const low = parseFloat(ticker.low_24h);
     
-    // Spread opportunity
-    if (spread > 0.3) {
-      const netEdge = spread * 0.5 - 0.2;
+    // Skip pairs we already hold
+    const currency = ticker.currency_pair.split('_')[0];
+    const currentHolding = holdings.get(currency);
+    if (currentHolding && currentHolding > 0) continue;
+    
+    // SCALP STRATEGY 1: Tight spread + high volume = market maker opportunity
+    if (spread > 0.4 && spread < 1.5 && volume > 200000) {
+      const netEdge = spread * 0.4 - 0.4; // Conservative estimate after fees
       if (netEdge >= minEdge) {
-        opportunities.push({ type: 'spread', pair: ticker.currency_pair, edge: netEdge, price: bid, confidence: Math.min(95, 50 + volume / 10000) });
+        opportunities.push({ 
+          type: 'spread_scalp', 
+          pair: ticker.currency_pair, 
+          edge: netEdge, 
+          price: bid + (ask - bid) * 0.3, // Enter between bid-ask
+          confidence: Math.min(90, 60 + volume / 50000),
+          takeProfit: ask * 0.999, // Sell at ask minus small buffer
+          stopLoss: bid * 0.985,
+        });
       }
     }
     
-    // Mean reversion
-    if (change < -15) {
-      const bounceEdge = Math.abs(change) * 0.2;
-      if (bounceEdge >= minEdge) {
-        opportunities.push({ type: 'reversion', pair: ticker.currency_pair, edge: bounceEdge, price: last, confidence: Math.min(90, 60 + Math.abs(change)) });
-      }
+    // SCALP STRATEGY 2: Bounce from support (near 24h low with reversal)
+    const distanceFromLow = ((last - low) / low) * 100;
+    if (distanceFromLow < 3 && change > -5 && change < 0 && volume > 150000) {
+      // Price near low but not crashing - potential bounce
+      const bounceEdge = 2.5; // Target 2.5% bounce
+      opportunities.push({
+        type: 'bounce_scalp',
+        pair: ticker.currency_pair,
+        edge: bounceEdge,
+        price: last,
+        confidence: Math.min(85, 55 + volume / 100000),
+        takeProfit: last * 1.025,
+        stopLoss: low * 0.99,
+      });
     }
     
-    // Momentum
-    if (change > 10) {
-      const momentumEdge = change * 0.15;
-      if (momentumEdge >= minEdge) {
-        opportunities.push({ type: 'momentum', pair: ticker.currency_pair, edge: momentumEdge, price: last, confidence: Math.min(85, 50 + change) });
-      }
+    // SCALP STRATEGY 3: Breakout continuation (just broke high)
+    const distanceFromHigh = ((high - last) / high) * 100;
+    if (distanceFromHigh < 1 && change > 5 && change < 15 && volume > 300000) {
+      // Near high with momentum - ride the breakout
+      const breakoutEdge = 2;
+      opportunities.push({
+        type: 'breakout_scalp',
+        pair: ticker.currency_pair,
+        edge: breakoutEdge,
+        price: last,
+        confidence: Math.min(80, 50 + change),
+        takeProfit: last * 1.03,
+        stopLoss: last * 0.985,
+      });
     }
   }
   
-  opportunities.sort((a, b) => b.edge - a.edge);
+  opportunities.sort((a, b) => (b.edge * b.confidence) - (a.edge * a.confidence));
   
-  // Execute best opportunities
-  const balances = await gateRequest('/spot/accounts');
-  const usdtBalance = balances.find((b: { currency: string }) => b.currency === 'USDT');
-  const availableUSDT = usdtBalance ? parseFloat(usdtBalance.available) : 0;
+  const maxTradeSize = Math.min((settings.maxTradeSize as number) || 20, usdtBalance * 0.25);
+  const results = { scanned: tickers.length, found: opportunities.length, executed: 0, successful: exitResults.sold, exitProfit: exitResults.profit };
   
-  const maxTradeSize = (settings.maxTradeSize as number) || 25;
-  const results = { scanned: tickers.length, found: opportunities.length, executed: 0, successful: 0 };
-  
-  for (const opp of opportunities.slice(0, 3)) {
-    if (opp.confidence < 50 || opp.edge > 15) continue;
+  // Only take 1 new position per cycle to manage risk
+  for (const opp of opportunities.slice(0, 1)) {
+    if (opp.confidence < 55 || opp.edge > 10) continue;
     
-    const tradeAmount = availableUSDT * (maxTradeSize / 100);
+    const tradeAmount = Math.min(maxTradeSize, usdtBalance * 0.2);
     if (tradeAmount < 5) continue;
     
     const amount = (tradeAmount / opp.price).toFixed(6);
@@ -137,7 +274,7 @@ async function runTradingArm(settings: Record<string, unknown>) {
         currency_pair: opp.pair,
         side: 'buy',
         amount,
-        price: opp.price.toString(),
+        price: opp.price.toFixed(8),
         type: 'limit',
         time_in_force: 'ioc',
       });
@@ -156,21 +293,19 @@ async function runTradingArm(settings: Record<string, unknown>) {
           expected_edge: opp.edge,
           status: 'filled',
         });
-        await log('info', 'TRADING', `Trade executed: ${opp.pair} @ ${opp.price}`, { orderId: order.id, edge: opp.edge });
+        await log('info', 'TRADING', `ENTRY: ${opp.type} ${opp.pair} @ ${opp.price} | TP: ${opp.takeProfit?.toFixed(6)} | SL: ${opp.stopLoss?.toFixed(6)}`, { orderId: order.id, edge: opp.edge });
       }
     } catch (err) {
-      await log('error', 'TRADING', `Trade failed: ${opp.pair}`, { error: err instanceof Error ? err.message : 'Unknown' });
+      await log('error', 'TRADING', `Entry failed: ${opp.pair}`, { error: err instanceof Error ? err.message : 'Unknown' });
     }
-    
-    await new Promise(r => setTimeout(r, 200));
   }
   
   return results;
 }
 
-// ==================== LIQUIDATION ARM ====================
+// ==================== DUST CLEANER (only clean tiny balances, not positions) ====================
 async function runLiquidationArm() {
-  await log('info', 'LIQUIDATOR', 'Starting liquidation scan...');
+  await log('info', 'DUST_CLEANER', 'Cleaning dust balances only...');
   
   const balances = await gateRequest('/spot/accounts');
   const tickers = await gateRequest('/spot/tickers');
@@ -178,7 +313,7 @@ async function runLiquidationArm() {
     tickers.map((t: { currency_pair: string; highest_bid: string }) => [t.currency_pair, t])
   );
   
-  let liquidated = 0;
+  let cleaned = 0;
   
   for (const balance of balances) {
     if (balance.currency === 'USDT' || parseFloat(balance.available) <= 0) continue;
@@ -188,7 +323,11 @@ async function runLiquidationArm() {
     if (!ticker) continue;
     
     const value = parseFloat(balance.available) * parseFloat(ticker.highest_bid);
-    if (value < 0.5) continue;
+    
+    // ONLY clean dust (< $1) - not real positions!
+    if (value >= 1) continue;
+    
+    if (value < 0.1) continue; // Too small to bother
     
     try {
       const order = await gateRequest('/spot/orders', 'POST', {}, {
@@ -201,17 +340,15 @@ async function runLiquidationArm() {
       });
       
       if (order.id) {
-        liquidated += value;
-        await log('info', 'LIQUIDATOR', `Liquidated ${balance.currency} for $${value.toFixed(2)}`);
+        cleaned += value;
+        await log('info', 'DUST_CLEANER', `Cleaned dust: ${balance.currency} ($${value.toFixed(2)})`);
       }
     } catch (err) {
       // Skip on error
     }
-    
-    await new Promise(r => setTimeout(r, 100));
   }
   
-  return { liquidated };
+  return { cleaned };
 }
 
 // ==================== REWARDS ARM (Airdrops, NFTs, etc.) ====================
