@@ -41,11 +41,15 @@ interface Goal {
 }
 
 const GOAL_TYPES = {
-  daily_profit: { label: 'רווח יומי ($)', icon: DollarSign, color: 'text-green-500' },
-  balance_target: { label: 'יעד יתרה ($)', icon: Target, color: 'text-blue-500' },
-  growth_percentage: { label: 'צמיחה (%)', icon: Percent, color: 'text-purple-500' },
-  winning_trades: { label: 'עסקאות מנצחות', icon: Trophy, color: 'text-yellow-500' },
+  daily_profit: { label: 'רווח יומי ($)', icon: DollarSign, color: 'text-profit' },
+  balance_target: { label: 'יעד יתרה ($)', icon: Target, color: 'text-info' },
+  growth_percentage: { label: 'צמיחה (%)', icon: Percent, color: 'text-accent' },
+  winning_trades: { label: 'עסקאות מנצחות', icon: Trophy, color: 'text-warning' },
 };
+
+// Compound goal system - doubles daily, minimum $500
+const MIN_DAILY_GOAL = 500;
+const DAILY_MULTIPLIER = 2;
 
 export function GoalsPanel() {
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -92,7 +96,14 @@ export function GoalsPanel() {
   }
 
   async function addGoal() {
-    if (!newTargetValue || parseFloat(newTargetValue) <= 0) {
+    let targetValue = parseFloat(newTargetValue);
+    
+    // Enforce minimum $500 for daily profit goals
+    if (newGoalType === 'daily_profit') {
+      targetValue = Math.max(MIN_DAILY_GOAL, targetValue || MIN_DAILY_GOAL);
+    }
+    
+    if (!targetValue || targetValue <= 0) {
       toast.error('הכנס ערך יעד תקין');
       return;
     }
@@ -142,11 +153,12 @@ export function GoalsPanel() {
         .from('trading_goals')
         .insert({
           goal_type: newGoalType,
-          target_value: parseFloat(newTargetValue),
+          target_value: targetValue,
           start_value: startValue,
           current_value: currentValue,
           auto_adjust_aggression: autoAdjust,
           priority: goals.length + 1,
+          notes: newGoalType === 'daily_profit' ? `יעד יומי מינימלי: $${MIN_DAILY_GOAL} | מוכפל כל יום` : null,
         });
 
       if (error) throw error;
@@ -175,27 +187,57 @@ export function GoalsPanel() {
   async function resetDailyGoals() {
     setIsLoading(true);
     try {
-      // Reset daily profit goals
-      await supabase
+      // Get current daily profit goals to calculate new target
+      const { data: dailyGoals } = await supabase
         .from('trading_goals')
-        .update({ 
-          current_value: 0, 
-          status: 'active',
-          achieved_at: null 
-        })
+        .select('*')
         .eq('goal_type', 'daily_profit');
+      
+      for (const goal of (dailyGoals || []) as Goal[]) {
+        // Double the target if goal was achieved, otherwise keep same
+        let newTarget = goal.target_value;
+        if (goal.status === 'achieved') {
+          newTarget = goal.target_value * DAILY_MULTIPLIER;
+        }
+        // Ensure minimum of $500
+        newTarget = Math.max(MIN_DAILY_GOAL, newTarget);
+        
+        await supabase
+          .from('trading_goals')
+          .update({ 
+            current_value: 0, 
+            target_value: newTarget,
+            status: 'active',
+            achieved_at: null,
+            notes: `יעד יומי: $${newTarget} (הוכפל אוטומטית)`
+          })
+          .eq('id', goal.id);
+      }
 
-      // Reset winning trades goals
-      await supabase
+      // Reset winning trades goals (also double if achieved)
+      const { data: winGoals } = await supabase
         .from('trading_goals')
-        .update({ 
-          current_value: 0, 
-          status: 'active',
-          achieved_at: null 
-        })
+        .select('*')
         .eq('goal_type', 'winning_trades');
+      
+      for (const goal of (winGoals || []) as Goal[]) {
+        let newTarget = goal.target_value;
+        if (goal.status === 'achieved') {
+          newTarget = goal.target_value * DAILY_MULTIPLIER;
+        }
+        
+        await supabase
+          .from('trading_goals')
+          .update({ 
+            current_value: 0,
+            target_value: newTarget,
+            status: 'active',
+            achieved_at: null 
+          })
+          .eq('id', goal.id);
+      }
 
-      toast.success('יעדים יומיים אופסו');
+      toast.success(`🚀 יעדים יומיים אופסו והוכפלו! מינימום: $${MIN_DAILY_GOAL}`);
       fetchGoals();
     } catch (e) {
       toast.error('שגיאה באיפוס');
@@ -296,6 +338,9 @@ export function GoalsPanel() {
           <p className="text-xs text-muted-foreground mt-1">
             {activeGoals.length} יעדים פעילים | {completedGoals.length} הושגו
           </p>
+          <p className="text-xs text-warning mt-1">
+            🔥 מינימום יומי: ${MIN_DAILY_GOAL} | יעדים מוכפלים כל יום!
+          </p>
         </div>
 
         {/* Add Goal Form */}
@@ -319,16 +364,23 @@ export function GoalsPanel() {
             <div className="flex gap-2">
               <Input
                 type="number"
-                placeholder="ערך יעד"
+                placeholder={newGoalType === 'daily_profit' ? `מינימום $${MIN_DAILY_GOAL}` : 'ערך יעד'}
                 value={newTargetValue}
                 onChange={(e) => setNewTargetValue(e.target.value)}
                 className="flex-1"
+                min={newGoalType === 'daily_profit' ? MIN_DAILY_GOAL : 1}
               />
               <Button onClick={addGoal} disabled={isLoading}>
                 <Target className="h-4 w-4 mr-1" />
                 הוסף
               </Button>
             </div>
+            
+            {newGoalType === 'daily_profit' && (
+              <p className="text-xs text-warning">
+                ⚡ יעד יומי מוכפל אוטומטית כל יום כשמושג!
+              </p>
+            )}
             
             <div className="flex items-center justify-between">
               <Label className="text-xs">התאם אגרסיביות אוטומטית</Label>
