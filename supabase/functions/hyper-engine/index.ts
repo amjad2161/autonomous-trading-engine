@@ -7,69 +7,57 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== DYNAMIC ADAPTIVE CONFIG =====
-// All values are BASE values that get adjusted dynamically
+// ===== ULTRA-WIDE SCAN CONFIG =====
+// Scan ALL 2,500+ pairs on Gate.io - no restrictions!
 const BASE_CONFIG = {
-  // Base thresholds (will be adjusted by market conditions)
-  baseMinEdge: 0.15,         // Base edge - adjusted dynamically
-  baseMinVolume: 100_000,    // Base volume requirement
-  baseMaxSpread: 0.3,        // Base max spread
+  // ULTRA-LOW thresholds - catch every tiny opportunity!
+  baseMinEdge: 0.01,         // 0.01% edge is enough for rapid trades!
+  baseMinVolume: 10_000,     // Very low volume requirement - more pairs!
+  baseMaxSpread: 1.0,        // Accept wider spreads - more opportunities!
   
-  // Strategy thresholds
-  momentumMinChange: 1.5,
-  momentumMaxChange: 30,
-  reversionMinDrop: -2.5,
-  reversionMaxDrop: -35,
+  // Strategy thresholds - more sensitive
+  momentumMinChange: 0.5,    // Lower threshold - catch more momentum
+  momentumMaxChange: 50,     // Higher max - catch pumps
+  reversionMinDrop: -1.0,    // Smaller drops qualify
+  reversionMaxDrop: -50,     // Bigger drops too
   
   // Position sizing - PRECISE ADAPTIVE SYSTEM
-  // These are base values that get scaled based on actual available capital
   minPositionUsdt: 3,        // Gate.io absolute minimum
-  maxPositionUsdt: 50,       // Maximum per trade (user preference)
-  basePositionPct: 10,       // Base: 10% of available balance per trade
-  // Dynamic scaling thresholds
-  smallBalanceThreshold: 10, // Below this, use more aggressive sizing
+  maxPositionUsdt: 50,       // Maximum per trade
+  basePositionPct: 15,       // 15% of available balance per trade
+  smallBalanceThreshold: 10,
   mediumBalanceThreshold: 50,
   largeBalanceThreshold: 200,
   
-  // Continuous operation
-  burstDurationMs: 55000,
-  cycleIntervalMs: 2000,
+  // ULTRA-FAST operation - no waiting!
+  burstDurationMs: 58000,    // Run almost full minute
+  cycleIntervalMs: 500,      // 500ms between cycles = 2 trades/second possible!
   
   // Auto-liquidation
   liquidateThreshold: 3,
   minDustValue: 0.1,
   
-  // Exclusions
-  excludeSymbols: ['USDT_USDT', 'USDC_USDT', 'DAI_USDT', 'FHE_USDT'],
-  excludePatterns: ['3L', '5L', '3S', '5S', '2L', '2S', 'BULL', 'BEAR'],
+  // MINIMAL exclusions - scan EVERYTHING!
+  excludeSymbols: ['USDT_USDT'],  // Only exclude impossible pairs
+  excludePatterns: ['3L', '5L', '3S', '5S', '2L', '2S', 'BULL', 'BEAR'],  // Leveraged only
   stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD'],
   
-  // Priority pairs
-  priorityPairs: [
-    'BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'ADA_USDT',
-    'DOGE_USDT', 'AVAX_USDT', 'DOT_USDT', 'LINK_USDT', 'MATIC_USDT',
-    'NEAR_USDT', 'SUI_USDT', 'APT_USDT', 'SEI_USDT', 'INJ_USDT',
-    'TIA_USDT', 'FTM_USDT', 'ATOM_USDT', 'ALGO_USDT', 'HBAR_USDT',
-    'UNI_USDT', 'AAVE_USDT', 'MKR_USDT', 'LDO_USDT', 'CRV_USDT',
-    'FET_USDT', 'RNDR_USDT', 'AGIX_USDT', 'IMX_USDT', 'GALA_USDT',
-    'PEPE_USDT', 'SHIB_USDT', 'FLOKI_USDT', 'BONK_USDT', 'WIF_USDT',
-    'ARB_USDT', 'OP_USDT', 'STX_USDT', 'ORDI_USDT', 'JUP_USDT',
-  ],
+  // NO priority pairs - ALL pairs are equal!
   scanAllPairs: true,
-  priorityBoost: 1.5,
+  priorityBoost: 1.0,        // No boost - equal opportunity
   
-  // Never stop trading
-  cooldownSeconds: 0,
+  // NEVER STOP - continuous trading 24/7
+  cooldownSeconds: 0,        // No cooldown between same pair
   maxConsecutiveLosses: 999,
   lossStreakCooldownMs: 0,
   minWinRateToTrade: 0,
   recentTradesToCheck: 0,
   
-  // Protection
-  baseStopLoss: 0.8,
-  baseTakeProfit: 1.5,
-  trailingStopPct: 0.4,
-  useExchangeOrders: true,
+  // Minimal protection for rapid trades
+  baseStopLoss: 2.0,         // Wider stop for volatile pairs
+  baseTakeProfit: 0.5,       // Take profit fast!
+  trailingStopPct: 0.3,
+  useExchangeOrders: false,  // No exchange orders - instant in/out only!
 };
 
 // ===== DYNAMIC PARAMETER ENGINE =====
@@ -828,54 +816,112 @@ serve(async (req) => {
           
           let edge = 0, strat = '';
           
-          // Momentum - adjust edge calculation based on market volatility
-          const volMultiplier = marketState.avgVolatility > 3 ? 1.2 : marketState.avgVolatility < 1 ? 0.8 : 1.0;
+          // ===== ULTRA-AGGRESSIVE OPPORTUNITY DETECTION =====
+          // Every pair is an opportunity! Scan ALL strategies simultaneously
           
-          if (data.change >= CONFIG.momentumMinChange && data.change <= CONFIG.momentumMaxChange) {
-            edge = data.change * 0.12 * volMultiplier - spread - 0.08;
-            strat = 'M';
-          }
-          // Reversion
-          else if (data.change <= CONFIG.reversionMinDrop && data.change >= CONFIG.reversionMaxDrop) {
-            edge = Math.abs(data.change) * 0.15 * volMultiplier - spread - 0.08;
-            strat = 'R';
-          }
-          // Spread capture (simple)
-          else if (spread < 0.1 && data.volume > 500_000) {
-            edge = 0.2 - spread;
-            strat = 'S';
-          }
+          const volMultiplier = 1.0; // No reduction - be aggressive
+          const feeBuffer = 0.08; // 0.08% roundtrip fees
           
-          // ===== SPREAD ARBITRAGE: Buy + Sell instantly on same pair =====
-          const spreadEdge = spread - 0.2;
-          if (spreadEdge >= 0.1 && data.volume > 1_000_000) {
-            if (spreadEdge > edge) {
-              edge = spreadEdge;
-              strat = 'ARB';
-            }
-          }
-          
-          // ===== RAPID TRADER STRATEGY: Ultra-tight spreads for HFT-style trades =====
-          // Looking for pairs with very tight spreads (0.1-0.5%) and high liquidity
-          // These are perfect for rapid in-out trades with minimal profit targets
-          if (spread >= 0.08 && spread <= 0.5 && data.volume > 500_000) {
-            // Calculate rapid trade edge: we aim for 0.03-0.1% profit per trade
-            // Net edge = (spread * capture_rate) - fees
-            const captureRate = 0.4; // Expect to capture 40% of spread
-            const rapidEdge = (spread * captureRate) - 0.1; // minus 0.1% roundtrip fees
-            
-            if (rapidEdge > 0.02 && rapidEdge > edge) {
+          // Strategy 1: RAPID - Main strategy for ALL pairs with any spread
+          // Target: 0.01-0.1% profit per trade, high frequency
+          if (spread > 0.05 && spread < 2.0) {
+            const captureRate = 0.5; // Aggressive: expect 50% spread capture
+            const rapidEdge = (spread * captureRate) - feeBuffer;
+            if (rapidEdge > edge) {
               edge = rapidEdge;
               strat = 'RAPID';
             }
           }
           
-          // Use DYNAMIC edge threshold
-          if (edge >= dynamicParams.minEdge) {
-            const score = edge * Math.log10(data.volume / 50_000) / (spread + 0.05);
-            // RAPID strategy gets priority boost for speed
-            const rapidBoost = strat === 'RAPID' ? 1.3 : 1.0;
-            opps.push({ symbol, price: data.price, edge, strat, min: pair.min, prec: pair.prec, score: score * rapidBoost, minQuote: pair.minQuote, bid: data.bid, ask: data.ask });
+          // Strategy 2: MICRO - Ultra-small edge, super high frequency
+          // For very liquid pairs with tiny spreads
+          if (spread < 0.15 && data.volume > 100_000) {
+            const microEdge = 0.05 - spread * 0.3; // Tiny but consistent
+            if (microEdge > edge) {
+              edge = microEdge;
+              strat = 'MICRO';
+            }
+          }
+          
+          // Strategy 3: Momentum - riding trends
+          if (data.change >= CONFIG.momentumMinChange && data.change <= CONFIG.momentumMaxChange) {
+            const momEdge = data.change * 0.15 * volMultiplier - spread - feeBuffer;
+            if (momEdge > edge) {
+              edge = momEdge;
+              strat = 'M';
+            }
+          }
+          
+          // Strategy 4: Reversion - bounce from drops
+          if (data.change <= CONFIG.reversionMinDrop && data.change >= CONFIG.reversionMaxDrop) {
+            const revEdge = Math.abs(data.change) * 0.18 * volMultiplier - spread - feeBuffer;
+            if (revEdge > edge) {
+              edge = revEdge;
+              strat = 'R';
+            }
+          }
+          
+          // Strategy 5: Spread capture
+          if (spread < 0.2) {
+            const spreadCapEdge = 0.25 - spread;
+            if (spreadCapEdge > edge) {
+              edge = spreadCapEdge;
+              strat = 'S';
+            }
+          }
+          
+          // Strategy 6: ARB - spread arbitrage on wide spreads
+          if (spread >= 0.3 && data.volume > 50_000) {
+            const arbEdge = spread * 0.6 - feeBuffer;
+            if (arbEdge > edge) {
+              edge = arbEdge;
+              strat = 'ARB';
+            }
+          }
+          
+          // Strategy 7: PUMP - catch rapid price increases
+          if (data.change > 3 && data.volume > 200_000) {
+            const pumpEdge = Math.min(data.change * 0.1, 2.0) - spread;
+            if (pumpEdge > edge) {
+              edge = pumpEdge;
+              strat = 'PUMP';
+            }
+          }
+          
+          // Strategy 8: DIP - catch rapid price decreases for bounce
+          if (data.change < -3 && data.volume > 200_000) {
+            const dipEdge = Math.min(Math.abs(data.change) * 0.12, 2.5) - spread;
+            if (dipEdge > edge) {
+              edge = dipEdge;
+              strat = 'DIP';
+            }
+          }
+          
+          // SUPER LOW threshold - accept almost any positive edge!
+          const effectiveMinEdge = Math.max(0.005, dynamicParams.minEdge * 0.5); // 0.005% minimum!
+          
+          if (edge >= effectiveMinEdge) {
+            // Score formula: edge * volume factor / spread impact
+            // Higher volume = better, lower spread = better
+            const volumeFactor = Math.log10(Math.max(data.volume, 10000) / 10000);
+            const score = edge * volumeFactor / (spread + 0.02);
+            
+            // Boost RAPID and MICRO for high frequency
+            const stratBoost = (strat === 'RAPID' || strat === 'MICRO') ? 1.5 : 
+                               (strat === 'PUMP' || strat === 'DIP') ? 1.3 : 1.0;
+            
+            opps.push({ 
+              symbol, 
+              price: data.price, 
+              edge, 
+              strat, 
+              min: pair.min, 
+              prec: pair.prec, 
+              score: score * stratBoost, 
+              minQuote: pair.minQuote, 
+              bid: data.bid, 
+              ask: data.ask 
+            });
           }
         }
 
@@ -974,163 +1020,115 @@ serve(async (req) => {
           continue;
         }
 
-        // Execute - BUY + INSTANT SELL (no position holding!)
+        // Execute - TAKER STRATEGY: Fast in-out with minimal slippage
+        // For tight spreads: use market orders but be smart about it
         try {
           const amountStr = amount.toFixed(best.prec);
-          console.log(`⚡ [${cycle}] ${best.strat} ${best.symbol}: Buy+Sell | Edge=${best.edge.toFixed(3)}%`);
           
-          // ===== STEP 1: BUY =====
+          const bidPrice = best.bid || best.price * 0.999;
+          const askPrice = best.ask || best.price * 1.001;
+          const spread = askPrice - bidPrice;
+          const spreadPct = (spread / bidPrice) * 100;
+          
+          console.log(`⚡ [${cycle}] ${best.strat} ${best.symbol}: Spread=${spreadPct.toFixed(3)}% | Edge=${best.edge.toFixed(3)}%`);
+          
+          // ===== FAST TAKER EXECUTION =====
+          // For most cases: market buy, then immediate market sell at slightly higher
+          // Goal: ride any micro-momentum in the milliseconds after buy
+          
+          // ===== STEP 1: MARKET BUY =====
           const buyOrder = await gate('POST', '/spot/orders', key, secret, {
             currency_pair: best.symbol, 
             side: 'buy', 
             type: 'market',
             amount: amountStr, 
             time_in_force: 'ioc',
-          }) as { id?: string; avg_deal_price?: string; filled_total?: string; amount?: string };
+          }) as { id?: string; avg_deal_price?: string; filled_total?: string; amount?: string; filled_amount?: string };
           
           const buyFilled = parseFloat(buyOrder.filled_total || '0');
-          const buyPrice = parseFloat(buyOrder.avg_deal_price || best.price.toString());
+          const buyFilledAmount = parseFloat(buyOrder.filled_amount || '0');
+          const buyPrice = parseFloat(buyOrder.avg_deal_price || askPrice.toString());
           
-          if (buyFilled < 1) {
-            console.log(`⚠️ [${cycle}] Buy not filled ($${buyFilled.toFixed(2)})`);
+          if (buyFilledAmount < best.min * 0.5) {
+            console.log(`⚠️ [${cycle}] Buy not filled (amt=${buyFilledAmount.toFixed(4)})`);
             results.push({ t: cycle, s: best.symbol, a: 'nofill' });
             recentSymbols.set(best.symbol, Date.now());
-            await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
+            await new Promise(r => setTimeout(r, 50));
             continue;
           }
           
-          // Calculate actual bought amount from USDT filled
-          const boughtAmount = buyFilled / buyPrice;
+          console.log(`✅ BUY: ${buyFilledAmount.toFixed(best.prec)} @ $${buyPrice.toFixed(6)} = $${buyFilled.toFixed(2)}`);
           
-          // ===== STEP 2: EXECUTE STRATEGY =====
-          // RAPID/ARB strategies: Instant buy+sell (no position holding)
-          // M/R/S strategies: Also instant buy+sell for safety
-          // Only use exchange protection for very specific long-hold strategies
-          const useInstantSell = ['RAPID', 'ARB', 'M', 'R', 'S'].includes(best.strat);
+          // ===== STEP 2: WAIT FOR MICRO-MOMENTUM =====
+          // Give the price a moment to move in our favor
+          // Momentum trades need time to develop
+          const waitTime = best.strat === 'M' || best.strat === 'PUMP' ? 200 : 
+                           best.strat === 'R' || best.strat === 'DIP' ? 300 : 100;
+          await new Promise(r => setTimeout(r, waitTime));
           
-          if (!useInstantSell && CONFIG.useExchangeOrders) {
-            // Pass DYNAMIC SL/TP to protection function
-            const protection = await placeExchangeProtection(
-              key, secret, 
-              best.symbol, 
-              boughtAmount * 0.998, // Account for fees
-              buyPrice,
-              best.prec,
-              dynamicParams.stopLossPct,  // Dynamic Stop Loss
-              dynamicParams.takeProfitPct  // Dynamic Take Profit
-            );
-            
-            // Log the buy with protection info
-            await supabase.from('trade_history').insert({
+          // Get fresh price before selling
+          const freshTickers = await getTickers();
+          const freshTicker = freshTickers.get(best.symbol);
+          const currentBid = freshTicker?.bid || bidPrice;
+          
+          // ===== STEP 3: SMART SELL =====
+          const sellAmt = (buyFilledAmount * 0.999).toFixed(best.prec);
+          
+          // Only sell if price moved up, otherwise use market to exit
+          const priceChange = ((currentBid - buyPrice) / buyPrice) * 100;
+          const useLimit = priceChange > 0.05; // Use limit if price up >0.05%
+          
+          const sellOrder = await gate('POST', '/spot/orders', key, secret, {
+            currency_pair: best.symbol, 
+            side: 'sell', 
+            type: useLimit ? 'limit' : 'market',
+            price: useLimit ? currentBid.toFixed(8) : undefined,
+            amount: sellAmt, 
+            time_in_force: 'ioc',
+          }) as { id?: string; avg_deal_price?: string; filled_total?: string; filled_amount?: string };
+          
+          const sellFilled = parseFloat(sellOrder.filled_total || '0');
+          const sellFilledAmount = parseFloat(sellOrder.filled_amount || '0');
+          const sellPrice = parseFloat(sellOrder.avg_deal_price || bidPrice.toString());
+          
+          // Calculate ACTUAL profit (USDT terms)
+          const netPnl = sellFilled - buyFilled;
+          const netPnlPct = buyFilled > 0 ? (netPnl / buyFilled) * 100 : 0;
+          
+          trades += 2;
+          pnl += netPnl;
+          
+          // Log to database
+          await supabase.from('trade_history').insert([
+            {
               symbol: best.symbol, 
               side: 'buy', 
-              type: `${best.strat}_PROTECTED`,
-              amount: boughtAmount,
+              type: best.strat, 
+              amount: buyFilledAmount,
               price: buyPrice, 
               expected_edge: best.edge, 
               actual_pnl: 0,
               order_id: buyOrder.id, 
-              status: protection.stopLossOrderId ? 'protected' : 'unprotected', 
+              status: 'executed', 
               executed_at: new Date().toISOString(),
-            });
-            
-            const slStatus = protection.stopLossOrderId ? '✅' : '❌';
-            const tpStatus = protection.takeProfitOrderId ? '✅' : '❌';
-            console.log(`🛡️ [${cycle}] ${best.symbol} PROTECTED | SL:${slStatus}@$${protection.stopPrice.toFixed(4)} TP:${tpStatus}@$${protection.tpPrice.toFixed(4)}`);
-            
-            trades++;
-            results.push({ 
-              t: cycle, 
-              s: best.symbol, 
-              a: 'buy_protected', 
-              e: best.edge, 
-              sl: protection.stopLossOrderId,
-              tp: protection.takeProfitOrderId,
-            });
-          } else if (best.strat === 'RAPID') {
-            // ===== RAPID TRADER: Instant buy + sell for quick profit =====
-            // This strategy aims for tiny profits on each trade, high frequency
-            const boughtAmount = buyFilled / buyPrice;
-            const sellAmt = (boughtAmount * 0.998).toFixed(best.prec);
-            
-            // Small delay for order book to update
-            await new Promise(r => setTimeout(r, 50));
-            
-            // Sell at bid price for immediate fill
-            const sellOrder = await gate('POST', '/spot/orders', key, secret, {
-              currency_pair: best.symbol, 
+            },
+            {
+              symbol: best.symbol, 
               side: 'sell', 
-              type: 'limit',
-              price: (best.bid || buyPrice * 1.001).toFixed(8),
-              amount: sellAmt, 
-              time_in_force: 'ioc',
-            }) as { id?: string; avg_deal_price?: string; filled_total?: string };
-            
-            const sellFilled = parseFloat(sellOrder.filled_total || '0');
-            const sellPrice = parseFloat(sellOrder.avg_deal_price || best.price.toString());
-            
-            const netPnl = sellFilled - buyFilled;
-            const netPnlPct = (netPnl / buyFilled) * 100;
-            
-            trades += 2;
-            pnl += netPnlPct;
-            
-            await supabase.from('trade_history').insert([
-              {
-                symbol: best.symbol, side: 'buy', type: 'RAPID', amount: boughtAmount,
-                price: buyPrice, expected_edge: best.edge, actual_pnl: 0,
-                order_id: buyOrder.id, status: 'executed', executed_at: new Date().toISOString(),
-              },
-              {
-                symbol: best.symbol, side: 'sell', type: 'RAPID', amount: parseFloat(sellAmt),
-                price: sellPrice, expected_edge: best.edge, actual_pnl: netPnl,
-                order_id: sellOrder.id, status: sellFilled > 0 ? 'executed' : 'unfilled', executed_at: new Date().toISOString(),
-              }
-            ]);
-            
-            const emoji = netPnl >= 0 ? '⚡' : '💨';
-            console.log(`${emoji} [${cycle}] RAPID ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%) in ${Date.now() - cycleStart}ms`);
-            results.push({ t: cycle, s: best.symbol, a: 'RAPID', e: best.edge, p: netPnlPct });
-            
-          } else {
-            // Fallback: Instant sell (old behavior)
-            const boughtAmount = buyFilled / buyPrice;
-            const sellAmt = (boughtAmount * 0.998).toFixed(best.prec);
-            
-            const sellOrder = await gate('POST', '/spot/orders', key, secret, {
-              currency_pair: best.symbol, 
-              side: 'sell', 
-              type: 'market',
-              amount: sellAmt, 
-              time_in_force: 'ioc',
-            }) as { id?: string; avg_deal_price?: string; filled_total?: string };
-            
-            const sellFilled = parseFloat(sellOrder.filled_total || '0');
-            const sellPrice = parseFloat(sellOrder.avg_deal_price || best.price.toString());
-            
-            const netPnl = sellFilled - buyFilled;
-            const netPnlPct = (netPnl / buyFilled) * 100;
-            
-            trades += 2;
-            pnl += netPnlPct;
-            
-            await supabase.from('trade_history').insert([
-              {
-                symbol: best.symbol, side: 'buy', type: best.strat, amount: boughtAmount,
-                price: buyPrice, expected_edge: best.edge, actual_pnl: 0,
-                order_id: buyOrder.id, status: 'executed', executed_at: new Date().toISOString(),
-              },
-              {
-                symbol: best.symbol, side: 'sell', type: best.strat, amount: parseFloat(sellAmt),
-                price: sellPrice, expected_edge: best.edge, actual_pnl: netPnl,
-                order_id: sellOrder.id, status: 'executed', executed_at: new Date().toISOString(),
-              }
-            ]);
-            
-            const emoji = netPnl >= 0 ? '✅' : '❌';
-            console.log(`${emoji} [${cycle}] ${best.strat} ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%)`);
-            results.push({ t: cycle, s: best.symbol, a: best.strat, e: best.edge, p: netPnlPct });
-          }
+              type: best.strat, 
+              amount: sellFilledAmount,
+              price: sellPrice, 
+              expected_edge: best.edge, 
+              actual_pnl: netPnl,
+              order_id: sellOrder.id, 
+              status: sellFilled > 0 ? 'executed' : 'unfilled', 
+              executed_at: new Date().toISOString(),
+            }
+          ]);
+          
+          const emoji = netPnl >= 0 ? '💰' : '❌';
+          console.log(`${emoji} [${cycle}] ${best.strat} ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%) in ${Date.now() - cycleStart}ms`);
+          results.push({ t: cycle, s: best.symbol, a: best.strat, e: best.edge, p: netPnlPct });
           
           recentSymbols.set(best.symbol, Date.now());
 
