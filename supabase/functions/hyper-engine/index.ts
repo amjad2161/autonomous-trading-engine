@@ -7,30 +7,30 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== ULTRA-AGGRESSIVE 24/7 CONFIG =====
+// ===== PROFITABLE TRADING CONFIG =====
 const CONFIG = {
-  // Aggressive edge - take every opportunity
-  minEdge: 0.15,
-  minVolume: 100_000,
-  maxSpread: 0.8,
+  // HIGHER edge threshold to ensure profit after fees
+  minEdge: 0.5,            // 0.5% minimum (was 0.1%)
+  minVolume: 200_000,      // Higher volume = better fills
+  maxSpread: 0.3,          // Tighter spread requirement
   
-  // Wide strategy range
-  momentumMinChange: 0.5,
+  // Strategy thresholds
+  momentumMinChange: 1.5,  // Stronger momentum required
   momentumMaxChange: 30,
-  reversionMinDrop: -1.0,
+  reversionMinDrop: -2.0,  // Deeper drop for reversion
   reversionMaxDrop: -40,
   
-  // Position sizing - use maximum capital
+  // Position sizing
   minPositionUsdt: 3,
-  maxPositionUsdt: 20,  // Reduced to avoid balance issues
-  positionPct: 60, // Use 60% of available balance
+  maxPositionUsdt: 10,
+  positionPct: 50,         // 50% of balance
   
   // Continuous operation
-  burstDurationMs: 55000, // Run for 55 seconds
-  cycleIntervalMs: 1000,  // Every 1 second
+  burstDurationMs: 55000,
+  cycleIntervalMs: 2000,   // Slower - every 2 seconds
   
-  // Auto-liquidation - always have USDT
-  liquidateThreshold: 5,
+  // Auto-liquidation
+  liquidateThreshold: 3,
   minDustValue: 0.1,
   
   // Exclusions
@@ -38,8 +38,8 @@ const CONFIG = {
   excludePatterns: ['3L', '5L', '3S', '5S', '2L', '2S', 'BULL', 'BEAR'],
   stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD'],
   
-  // No cooldown - trade same symbol repeatedly
-  cooldownSeconds: 5,
+  // Cooldown to avoid repeat losses
+  cooldownSeconds: 30,
 };
 
 // ===== GATE.IO API =====
@@ -331,13 +331,13 @@ serve(async (req) => {
           amount = Math.ceil(best.min * 1.01 * mult) / mult;
         }
         
-        // Final validation
+        // Final validation - use existing minOrderValue
         const orderValue = amount * best.price;
         
-        console.log(`📊 [${cycle}] ${best.symbol}: amt=${amount.toFixed(best.prec)} (prec=${best.prec}) min=${best.min} val=$${orderValue.toFixed(2)}`);
+        console.log(`📊 [${cycle}] ${best.symbol}: amt=${amount.toFixed(best.prec)} (prec=${best.prec}) min=${best.min} val=$${orderValue.toFixed(2)} minOrder=$${minOrderValue.toFixed(2)}`);
         
-        if (orderValue > usdt || orderValue < 3 || amount < best.min) {
-          console.log(`⏭️ [${cycle}] Validation fail: $${orderValue.toFixed(2)} > $${usdt.toFixed(2)} or amt ${amount} < ${best.min}`);
+        if (orderValue > usdt * 0.98 || orderValue < minOrderValue || amount < best.min) {
+          console.log(`⏭️ [${cycle}] Validation fail: val=$${orderValue.toFixed(2)} bal=$${usdt.toFixed(2)} minOrd=$${minOrderValue.toFixed(2)} amt=${amount.toFixed(best.prec)} min=${best.min}`);
           results.push({ t: cycle, s: best.symbol, a: 'skip', e: best.edge });
           await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
           continue;
