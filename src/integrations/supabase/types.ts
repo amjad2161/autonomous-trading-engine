@@ -158,6 +158,7 @@ export type Database = {
           current_balance: number | null
           id: string
           is_active: boolean
+          kill_switch_reset_at: string | null
           last_heartbeat: string | null
           settings: Json | null
           started_at: string | null
@@ -172,6 +173,7 @@ export type Database = {
           current_balance?: number | null
           id?: string
           is_active?: boolean
+          kill_switch_reset_at?: string | null
           last_heartbeat?: string | null
           settings?: Json | null
           started_at?: string | null
@@ -186,6 +188,7 @@ export type Database = {
           current_balance?: number | null
           id?: string
           is_active?: boolean
+          kill_switch_reset_at?: string | null
           last_heartbeat?: string | null
           settings?: Json | null
           started_at?: string | null

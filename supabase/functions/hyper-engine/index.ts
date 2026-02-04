@@ -303,9 +303,25 @@ async function getTodayPnL(supabase: any): Promise<{
   return { totalPnL, tradeCount, startingBalance };
 }
 
-// Check if kill-switch should be triggered
-function shouldTriggerKillSwitch(todayPnL: number, startingBalance: number): boolean {
+// Check if kill-switch should be triggered (considering manual reset)
+function shouldTriggerKillSwitch(
+  todayPnL: number, 
+  startingBalance: number, 
+  killSwitchResetAt: string | null
+): boolean {
   if (startingBalance <= 0) return false;
+  
+  // Check if kill-switch was manually reset today
+  if (killSwitchResetAt) {
+    const resetDate = new Date(killSwitchResetAt);
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    
+    // If reset was done today, don't trigger kill-switch
+    if (resetDate >= todayStart) {
+      return false;
+    }
+  }
   
   const lossPct = (todayPnL / startingBalance) * -100;
   return lossPct >= CONFIG.maxDailyLossPct;
@@ -358,10 +374,18 @@ serve(async (req) => {
     let cycleCount = (state?.total_cycles || 0) + 1;
     let cumulativePnL = state?.total_pnl || 0;
     let cumulativeTrades = state?.total_trades || 0;
+    
+    // Get kill_switch_reset_at from state (using type assertion for new column)
+    const stateTyped = state as { 
+      id: string;
+      kill_switch_reset_at?: string | null;
+      [key: string]: unknown;
+    } | null;
+    const killSwitchResetAt = stateTyped?.kill_switch_reset_at || null;
 
     // ===== KILL-SWITCH CHECK =====
     const todayStats = await getTodayPnL(supabase);
-    const killSwitchTriggered = shouldTriggerKillSwitch(todayStats.totalPnL, todayStats.startingBalance);
+    const killSwitchTriggered = shouldTriggerKillSwitch(todayStats.totalPnL, todayStats.startingBalance, killSwitchResetAt);
     
     if (killSwitchTriggered) {
       const lossPct = todayStats.startingBalance > 0 
