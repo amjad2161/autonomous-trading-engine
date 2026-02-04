@@ -343,114 +343,81 @@ serve(async (req) => {
           continue;
         }
 
-        // Execute
+        // Execute - ALL trades are instant Buy+Sell (no open positions!)
         try {
-          // Format amount correctly - always use string with proper precision
           const amountStr = amount.toFixed(best.prec);
+          console.log(`⚡ [${cycle}] ${best.strat} ${best.symbol}: Buy+Sell instantly | Edge=${best.edge.toFixed(3)}%`);
           
-          // ===== SPREAD ARBITRAGE: Buy + Sell instantly =====
-          if (best.strat === 'ARB') {
-            console.log(`⚡ [${cycle}] SPREAD ARB: ${best.symbol} spread=${((best.ask! - best.bid!) / best.ask! * 100).toFixed(3)}%`);
-            
-            // Step 1: Buy at market (hit the ask)
-            const buyOrder = await gate('POST', '/spot/orders', key, secret, {
-              currency_pair: best.symbol, 
-              side: 'buy', 
-              type: 'market',
-              amount: amountStr, 
-              time_in_force: 'ioc',
-            }) as { id?: string; avg_deal_price?: string; filled_total?: string; amount?: string };
-            
-            const buyFilled = parseFloat(buyOrder.filled_total || '0');
-            const buyAmount = parseFloat(buyOrder.amount || amountStr);
-            const buyPrice = parseFloat(buyOrder.avg_deal_price || best.ask!.toString());
-            
-            if (buyFilled < 1) {
-              console.log(`⚠️ [${cycle}] ARB buy not filled`);
-              results.push({ t: cycle, s: best.symbol, a: 'arb_nofill' });
-              recentSymbols.set(best.symbol, Date.now());
-              await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
-              continue;
-            }
-            
-            // Step 2: Immediately sell at market (hit the bid)
-            const sellAmt = (buyAmount * 0.998).toFixed(best.prec); // Account for tiny slippage
-            
-            const sellOrder = await gate('POST', '/spot/orders', key, secret, {
-              currency_pair: best.symbol, 
-              side: 'sell', 
-              type: 'market',
-              amount: sellAmt, 
-              time_in_force: 'ioc',
-            }) as { id?: string; avg_deal_price?: string; filled_total?: string };
-            
-            const sellFilled = parseFloat(sellOrder.filled_total || '0');
-            const sellPrice = parseFloat(sellOrder.avg_deal_price || best.bid!.toString());
-            
-            // Calculate actual P&L
-            const arbPnl = sellFilled - buyFilled;
-            const arbPnlPct = (arbPnl / buyFilled) * 100;
-            
-            trades += 2;
-            pnl += arbPnlPct;
+          // ===== STEP 1: BUY =====
+          const buyOrder = await gate('POST', '/spot/orders', key, secret, {
+            currency_pair: best.symbol, 
+            side: 'buy', 
+            type: 'market',
+            amount: amountStr, 
+            time_in_force: 'ioc',
+          }) as { id?: string; avg_deal_price?: string; filled_total?: string; amount?: string };
+          
+          const buyFilled = parseFloat(buyOrder.filled_total || '0');
+          const buyPrice = parseFloat(buyOrder.avg_deal_price || best.price.toString());
+          
+          if (buyFilled < 1) {
+            console.log(`⚠️ [${cycle}] Buy not filled ($${buyFilled.toFixed(2)})`);
+            results.push({ t: cycle, s: best.symbol, a: 'nofill' });
             recentSymbols.set(best.symbol, Date.now());
-            
-            // Log both trades
-            await supabase.from('trade_history').insert([
-              {
-                symbol: best.symbol, side: 'buy', type: 'market', amount: buyAmount,
-                price: buyPrice, expected_edge: best.edge, actual_pnl: 0,
-                order_id: buyOrder.id, status: 'executed', executed_at: new Date().toISOString(),
-              },
-              {
-                symbol: best.symbol, side: 'sell', type: 'market', amount: parseFloat(sellAmt),
-                price: sellPrice, expected_edge: best.edge, actual_pnl: arbPnl,
-                order_id: sellOrder.id, status: 'executed', executed_at: new Date().toISOString(),
-              }
-            ]);
-            
-            console.log(`✅ [${cycle}] ARB ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${arbPnl.toFixed(4)} (${arbPnlPct.toFixed(3)}%)`);
-            results.push({ t: cycle, s: best.symbol, a: 'arb', e: best.edge, p: arbPnlPct });
-            
-          } else {
-            // ===== REGULAR STRATEGIES (M/R/S) =====
-            console.log(`🔥 [${cycle}] Executing: ${best.symbol} amt=${amountStr} (${typeof amountStr})`);
-            
-            const order = await gate('POST', '/spot/orders', key, secret, {
-              currency_pair: best.symbol, 
-              side: 'buy', 
-              type: 'market',
-              amount: amountStr, 
-              time_in_force: 'ioc',
-            }) as { id?: string; avg_deal_price?: string; filled_total?: string };
-
-            const filled = parseFloat(order.filled_total || orderValue.toString());
-            const tradePnl = best.edge * filled / 100;
-            
-            trades++;
-            pnl += tradePnl;
-            recentSymbols.set(best.symbol, Date.now());
-
-            await supabase.from('trade_history').insert({
-              symbol: best.symbol, side: 'buy', type: 'market', amount,
-              price: parseFloat(order.avg_deal_price || best.price.toString()),
-              expected_edge: best.edge, actual_pnl: tradePnl,
-              order_id: order.id, status: 'executed', executed_at: new Date().toISOString(),
-            });
-
-            console.log(`✅ [${cycle}] ${best.strat} ${best.symbol} $${filled.toFixed(2)} +${tradePnl.toFixed(3)}%`);
-            results.push({ t: cycle, s: best.symbol, a: 'exec', e: best.edge, p: tradePnl });
+            await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
+            continue;
           }
+          
+          // Calculate actual bought amount from USDT filled
+          const boughtAmount = buyFilled / buyPrice;
+          
+          // ===== STEP 2: SELL IMMEDIATELY - No waiting! =====
+          const sellAmt = (boughtAmount * 0.998).toFixed(best.prec); // Minus fees
+          
+          const sellOrder = await gate('POST', '/spot/orders', key, secret, {
+            currency_pair: best.symbol, 
+            side: 'sell', 
+            type: 'market',
+            amount: sellAmt, 
+            time_in_force: 'ioc',
+          }) as { id?: string; avg_deal_price?: string; filled_total?: string };
+          
+          const sellFilled = parseFloat(sellOrder.filled_total || '0');
+          const sellPrice = parseFloat(sellOrder.avg_deal_price || best.price.toString());
+          
+          // Calculate actual P&L (USDT out - USDT in)
+          const netPnl = sellFilled - buyFilled;
+          const netPnlPct = (netPnl / buyFilled) * 100;
+          
+          trades += 2;
+          pnl += netPnlPct;
+          recentSymbols.set(best.symbol, Date.now());
+          
+          // Log both trades
+          await supabase.from('trade_history').insert([
+            {
+              symbol: best.symbol, side: 'buy', type: best.strat, amount: boughtAmount,
+              price: buyPrice, expected_edge: best.edge, actual_pnl: 0,
+              order_id: buyOrder.id, status: 'executed', executed_at: new Date().toISOString(),
+            },
+            {
+              symbol: best.symbol, side: 'sell', type: best.strat, amount: parseFloat(sellAmt),
+              price: sellPrice, expected_edge: best.edge, actual_pnl: netPnl,
+              order_id: sellOrder.id, status: 'executed', executed_at: new Date().toISOString(),
+            }
+          ]);
+          
+          const emoji = netPnl >= 0 ? '✅' : '❌';
+          console.log(`${emoji} [${cycle}] ${best.strat} ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%)`);
+          results.push({ t: cycle, s: best.symbol, a: best.strat, e: best.edge, p: netPnlPct });
 
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Unknown';
-          console.log(`❌ [${cycle}] ${best.symbol}: ${msg.slice(0, 60)}`);
+          console.log(`❌ [${cycle}] ${best.symbol}: ${msg.slice(0, 80)}`);
           results.push({ t: cycle, s: best.symbol, a: 'fail' });
           
-          // Add to failed symbols so we don't retry this session
+          // Add to failed symbols
           failedSymbols.add(best.symbol);
-          
-          // Also add short cooldown
           recentSymbols.set(best.symbol, Date.now());
         }
 
