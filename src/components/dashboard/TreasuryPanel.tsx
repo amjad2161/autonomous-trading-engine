@@ -1,10 +1,15 @@
-import { Wallet, Lock, TrendingUp, TrendingDown, PiggyBank, AlertCircle } from "lucide-react";
+import { useState } from "react";
+import { Wallet, Lock, TrendingUp, TrendingDown, PiggyBank, AlertCircle, Zap, Loader2 } from "lucide-react";
 import { useSpotBalances, useTickers, useTotalPortfolioValue, useUSDTBalance, useDailyPnL } from "@/hooks/useGateApi";
 import { formatUSDT, formatCrypto, formatPercentage } from "@/lib/gate-api";
+import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 export function TreasuryPanel() {
-  const { data: balances, isLoading: balancesLoading } = useSpotBalances();
+  const { data: balances, isLoading: balancesLoading, refetch } = useSpotBalances();
   const { data: tickers } = useTickers();
+  const [isLiquidating, setIsLiquidating] = useState(false);
   
   const usdtBalance = useUSDTBalance(balances);
   const totalValue = useTotalPortfolioValue(balances, tickers);
@@ -15,6 +20,88 @@ export function TreasuryPanel() {
     const total = parseFloat(b.available) + parseFloat(b.locked);
     return total > 0;
   }) || [];
+
+  // Non-USDT balances that can be liquidated
+  const liquidatableBalances = activeBalances.filter(b => {
+    if (b.currency === 'USDT') return false;
+    const ticker = tickers?.find(t => t.currency_pair === `${b.currency}_USDT`);
+    if (!ticker) return false;
+    const value = parseFloat(b.available) * parseFloat(ticker.last);
+    return value >= 0.5; // Only show if worth at least $0.50
+  });
+
+  const handleLiquidateAll = async () => {
+    if (liquidatableBalances.length === 0) {
+      toast.info("אין מטבעות לניזול");
+      return;
+    }
+
+    setIsLiquidating(true);
+    let successCount = 0;
+    let failCount = 0;
+    let totalUSDT = 0;
+
+    toast.info(`מנזל ${liquidatableBalances.length} מטבעות...`);
+
+    for (const balance of liquidatableBalances) {
+      try {
+        const ticker = tickers?.find(t => t.currency_pair === `${balance.currency}_USDT`);
+        if (!ticker) continue;
+
+        const amount = parseFloat(balance.available);
+        const pair = `${balance.currency}_USDT`;
+        const estimatedValue = amount * parseFloat(ticker.last);
+
+        // Skip if too small for Gate.io minimum ($3)
+        if (estimatedValue < 3) {
+          console.log(`Skip ${balance.currency}: $${estimatedValue.toFixed(2)} < $3 minimum`);
+          continue;
+        }
+
+        const { data, error } = await supabase.functions.invoke('gate-api', {
+          body: {
+            endpoint: '/spot/orders',
+            method: 'POST',
+            body: {
+              currency_pair: pair,
+              side: 'sell',
+              amount: amount.toFixed(8),
+              type: 'market',
+              time_in_force: 'ioc',
+            }
+          }
+        });
+
+        if (error) {
+          console.error(`Failed to sell ${balance.currency}:`, error);
+          failCount++;
+        } else if (data?.filled_total) {
+          const filled = parseFloat(data.filled_total);
+          totalUSDT += filled;
+          successCount++;
+          console.log(`✅ Sold ${balance.currency} for $${filled.toFixed(2)}`);
+        } else {
+          failCount++;
+        }
+
+        // Small delay between orders
+        await new Promise(r => setTimeout(r, 200));
+      } catch (e) {
+        console.error(`Error selling ${balance.currency}:`, e);
+        failCount++;
+      }
+    }
+
+    setIsLiquidating(false);
+    refetch();
+
+    if (successCount > 0) {
+      toast.success(`נוזלו ${successCount} מטבעות | +$${totalUSDT.toFixed(2)} USDT`);
+    }
+    if (failCount > 0) {
+      toast.warning(`${failCount} מטבעות נכשלו (כנראה מתחת למינימום)`);
+    }
+  };
 
   // Calculate allocation percentages
   const usdtPercent = totalValue > 0 ? (usdtBalance.total / totalValue) * 100 : 0;
@@ -27,7 +114,20 @@ export function TreasuryPanel() {
           <Wallet className="w-4 h-4 text-primary" />
           <h2 className="font-semibold text-sm">Treasury</h2>
         </div>
-        <span className="text-xs text-muted-foreground">Auto-rebalance: ON</span>
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={handleLiquidateAll}
+          disabled={isLiquidating || liquidatableBalances.length === 0}
+          className="h-7 text-xs gap-1"
+        >
+          {isLiquidating ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
+          ) : (
+            <Zap className="w-3 h-3" />
+          )}
+          {isLiquidating ? 'מנזל...' : `נזל הכל (${liquidatableBalances.length})`}
+        </Button>
       </div>
       
       <div className="p-3 sm:p-4 space-y-3 sm:space-y-4 flex-1 overflow-auto">
