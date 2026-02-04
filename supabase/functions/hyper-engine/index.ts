@@ -1093,6 +1093,54 @@ serve(async (req) => {
             }
           }
           
+          // ===== Strategy 5: SMART MEAN REVERSION =====
+          // IMPROVED: Multiple confirmations required!
+          // Old R strategy had 0% win rate - this version requires:
+          // 1. DEEP drop (>5%, not just 0.5%)
+          // 2. VERY high volume (panic selling = opportunity)
+          // 3. TIGHT spread (liquidity still exists)
+          // 4. Price NOT still crashing (bounce started)
+          // 5. Not a leverage token or meme coin
+          
+          const isDeepDrop = data.change < -5 && data.change > -25; // 5-25% drop
+          const isPanicVolume = data.volume > 500_000; // High volume = panic
+          const hasLiquidity = spread < 0.3; // Can still exit
+          const notLeveraged = !symbol.includes('UP') && !symbol.includes('DOWN');
+          
+          // Additional check: bid/ask ratio suggests buying pressure returning
+          const bidAskRatio = data.bid / data.ask;
+          const buyPressureReturning = bidAskRatio > 0.997; // Bid close to ask = buyers returning
+          
+          if (isDeepDrop && isPanicVolume && hasLiquidity && notLeveraged && buyPressureReturning) {
+            // Calculate reversion edge based on drop magnitude
+            // Deeper drops = higher expected bounce
+            const dropMagnitude = Math.abs(data.change);
+            const expectedBounce = dropMagnitude * 0.15; // Expect 15% of drop to bounce
+            const reversionEdge = expectedBounce - spread - feeBuffer;
+            
+            if (reversionEdge > edge && reversionEdge > 0.3) { // Higher threshold for reversion
+              edge = reversionEdge;
+              strat = 'REVERSION';
+              console.log(`🔄 REVERSION signal: ${symbol} dropped ${data.change.toFixed(1)}% vol=$${(data.volume/1000).toFixed(0)}K spread=${spread.toFixed(3)}%`);
+            }
+          }
+          
+          // ===== Strategy 6: OVERSOLD BOUNCE =====
+          // Even deeper drops with extreme volume - high conviction
+          const isExtremeDrop = data.change < -10 && data.change > -40;
+          const isExtremeVolume = data.volume > 1_000_000;
+          
+          if (isExtremeDrop && isExtremeVolume && hasLiquidity && notLeveraged) {
+            const dropMagnitude = Math.abs(data.change);
+            const bounceEdge = dropMagnitude * 0.12 - spread - feeBuffer;
+            
+            if (bounceEdge > edge && bounceEdge > 0.5) {
+              edge = bounceEdge;
+              strat = 'OVERSOLD';
+              console.log(`📉 OVERSOLD signal: ${symbol} crashed ${data.change.toFixed(1)}% vol=$${(data.volume/1000).toFixed(0)}K`);
+            }
+          }
+          
           // ===== MINIMUM EDGE THRESHOLD =====
           // Higher threshold = fewer but better trades
           const MIN_EDGE_THRESHOLD = 0.15; // Require at least 0.15% expected edge
