@@ -18,7 +18,8 @@ import {
   TradeHistoryTable,
   HyperEnginePanel,
   SettingsPanel,
-  TradingStatsPanel
+  TradingStatsPanel,
+  RapidTraderPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -146,9 +147,10 @@ const Index = () => {
         
         {/* Scalping Tab */}
         <TabsContent value="scalping" className="mt-0">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-12rem)]">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <RapidTraderPanel />
             <TickScalpingPanel />
-            <div className="grid grid-rows-2 gap-4">
+            <div className="lg:col-span-2 grid grid-cols-1 lg:grid-cols-2 gap-4 h-[350px]">
               <PositionsPanel />
               <ActivityLog />
             </div>
