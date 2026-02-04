@@ -9,8 +9,8 @@ const corsHeaders = {
 
 // ===== PROFITABLE TRADING CONFIG =====
 const CONFIG = {
-  // HIGHER edge threshold to ensure profit after fees
-  minEdge: 0.5,            // 0.5% minimum (was 0.1%)
+  // Edge threshold - minimum expected profit to execute trade
+  minEdge: 0.3,            // 0.3% minimum edge (was 0.5%)
   minVolume: 200_000,      // Higher volume = better fills
   maxSpread: 0.3,          // Tighter spread requirement
   
