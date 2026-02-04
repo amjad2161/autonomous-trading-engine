@@ -17,7 +17,8 @@ import {
   AdvancedAnalytics,
   TradeHistoryTable,
   HyperEnginePanel,
-  SettingsPanel
+  SettingsPanel,
+  TradingStatsPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -86,9 +87,9 @@ const Index = () => {
               <HyperEnginePanel />
             </div>
             
-            {/* Master Control Panel */}
+            {/* Trading Stats Panel */}
             <div className="lg:col-span-4">
-              <MasterControlPanel />
+              <TradingStatsPanel />
             </div>
             
             {/* Treasury */}
