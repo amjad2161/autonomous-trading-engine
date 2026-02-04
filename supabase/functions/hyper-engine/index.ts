@@ -9,8 +9,8 @@ const corsHeaders = {
 
 // ===== PROFITABLE TRADING CONFIG - AGGRESSIVE PROFITABILITY =====
 const CONFIG = {
-  // HIGHER edge threshold to GUARANTEE profit after fees (0.2% maker+taker)
-  minEdge: 0.7,            // 0.7% minimum edge (covers fees + profit margin)
+  // Lower edge for more trades (aggressive mode)
+  minEdge: 0.1,            // 0.1% minimum edge (more trades, smaller margins)
   minVolume: 300_000,      // Higher volume = better fills, less slippage
   maxSpread: 0.15,         // TIGHTER spread - max 0.15% (was 0.3%)
   
