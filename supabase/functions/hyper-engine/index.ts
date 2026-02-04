@@ -25,8 +25,9 @@ function getMarathonConfig(successfulTrades: number) {
   // Cycle interval: starts at 300ms, ends at 2000ms
   const cycleIntervalMs = Math.round(300 + (progress * 1700));
   
-  // Min edge: starts at 0.01%, ends at 0.3%
-  const baseMinEdge = 0.30 + (progress * 0.30); // Start at 0.3%, end at 0.6%
+  // Min edge: CRITICAL - must be high enough to cover fees!
+  // 0.5% minimum (0.2% fee each way = 0.4% + profit margin)
+  const baseMinEdge = 0.50 + (progress * 0.30); // Start at 0.5%, end at 0.8%
   
   // Wait time between buy/sell: starts at 50ms, ends at 500ms
   const tradeWaitMs = Math.round(50 + (progress * 450));
@@ -48,7 +49,7 @@ function getMarathonConfig(successfulTrades: number) {
 
 const BASE_CONFIG = {
   // These get overridden by marathon config
-  baseMinEdge: 0.30,          // Minimum 0.3% edge - QUALITY FIRST!
+  baseMinEdge: 0.50,          // Minimum 0.5% edge - covers 0.4% roundtrip fees + margin!
   baseMinVolume: 5_000,       // Ultra-low volume - more pairs!
   baseMaxSpread: 2.0,         // Accept any spread
   
@@ -225,6 +226,7 @@ async function getPerformanceState(supabase: any): Promise<PerformanceState> {
     };
   }
 }
+
 
 // ===== GOAL-BASED AGGRESSION SYSTEM =====
 // Goals double daily, minimum $500/day - ULTRA AGGRESSIVE MODE
@@ -1044,20 +1046,19 @@ serve(async (req) => {
         // ===== GOAL-BASED AGGRESSION =====
         const goalState = await getGoalState(supabase);
         
-        // Override with marathon config
-        dynamicParams.minEdge = Math.max(dynamicParams.minEdge * 0.5, marathonConfig.baseMinEdge);
+        // Override with marathon config - BUT KEEP EDGE HIGH!
+        // CRITICAL: Never go below 0.5% edge to cover fees!
+        dynamicParams.minEdge = Math.max(0.50, marathonConfig.baseMinEdge);
         dynamicParams.positionPct = marathonConfig.basePositionPct;
         
-        // Apply goal urgency multiplier
+        // Apply goal urgency multiplier - BUT KEEP EDGE HIGH!
         if (goalState.hasActiveGoals) {
-          // Higher urgency = lower edge threshold (more trades)
-          dynamicParams.minEdge = Math.max(0.01, dynamicParams.minEdge / goalState.urgencyMultiplier);
-          // Higher urgency = larger positions
+          // Higher urgency = larger positions (but NOT lower edge!)
           dynamicParams.positionPct = Math.min(70, dynamicParams.positionPct * goalState.urgencyMultiplier);
           dynamicParams.maxPositionUsdt = Math.min(100, dynamicParams.maxPositionUsdt * goalState.urgencyMultiplier);
           
           if (cycle % 20 === 1) {
-            console.log(`🎯 GOAL MODE: Progress=${goalState.overallProgress.toFixed(0)}% | Urgency=${goalState.urgencyMultiplier.toFixed(2)}x | Edge=${dynamicParams.minEdge.toFixed(3)}%`);
+            console.log(`🎯 GOAL MODE: Progress=${goalState.overallProgress.toFixed(0)}% | Urgency=${goalState.urgencyMultiplier.toFixed(2)}x | Edge=${dynamicParams.minEdge.toFixed(3)}% (FIXED MIN 0.5%)`);
           }
         }
         
@@ -1620,14 +1621,16 @@ serve(async (req) => {
             }
           }
           
-          // ===== MINIMUM EDGE THRESHOLD =====
-          const MIN_EDGE_THRESHOLD = 0.10; // Lowered for more opportunities with goal pressure
+          // ===== CRITICAL: HIGH EDGE THRESHOLD =====
+          // 0.5% MINIMUM to cover fees (0.2% each way = 0.4%) + profit margin
+          // This prevents fee-losing trades!
+          const MIN_EDGE_THRESHOLD = 0.50;
           
           if (edge >= MIN_EDGE_THRESHOLD) {
             const volumeFactor = Math.log10(Math.max(data.volume, 100000) / 100000);
             const score = edge * (1 + volumeFactor) / (spread + 0.05);
             
-            // Strategy priority boosts
+            // Strategy priority boosts - ONLY for profitable strategies!
             const stratBoost = 
               (strat === 'FLIP' || strat === 'MICRO') ? 1.6 :           // Ultra-fast = highest priority
               (strat === 'SCALP' || strat === 'WHALE') ? 1.5 :          // Proven strategies
@@ -1650,6 +1653,7 @@ serve(async (req) => {
               bid: data.bid, 
               ask: data.ask 
             });
+          }
           }
         }
 
@@ -1827,14 +1831,25 @@ serve(async (req) => {
           const sellFilledAmount = parseFloat(sellOrder.filled_amount || '0');
           const sellPrice = parseFloat(sellOrder.avg_deal_price || bidPrice.toString());
           
-          // Calculate ACTUAL profit (USDT terms)
-          const netPnl = sellFilled - buyFilled;
-          const netPnlPct = buyFilled > 0 ? (netPnl / buyFilled) * 100 : 0;
+          // ===== FIX: PROPER P&L CALCULATION =====
+          // If sell order wasn't filled, P&L is 0 (not negative!)
+          // We still have the asset, we didn't lose money
+          const sellWasFilled = sellFilled > 0 && sellFilledAmount >= best.min * 0.5;
           
-          trades += 2;
-          pnl += netPnl;
+          // Only calculate profit if sell was actually executed
+          const netPnl = sellWasFilled ? (sellFilled - buyFilled) : 0;
+          const netPnlPct = (sellWasFilled && buyFilled > 0) ? (netPnl / buyFilled) * 100 : 0;
           
-          // Log to database
+          // Only count as trade if both sides executed
+          if (sellWasFilled) {
+            trades += 2;
+            pnl += netPnl;
+          } else {
+            trades += 1; // Only the buy was executed
+            console.log(`⚠️ [${cycle}] ${best.symbol} SELL NOT FILLED - holding position for liquidation`);
+          }
+          
+          // Log to database with CORRECT P&L
           await supabase.from('trade_history').insert([
             {
               symbol: best.symbol, 
@@ -1855,14 +1870,15 @@ serve(async (req) => {
               amount: sellFilledAmount,
               price: sellPrice, 
               expected_edge: best.edge, 
-              actual_pnl: netPnl,
+              // FIX: If not filled, P&L is 0, not negative!
+              actual_pnl: sellWasFilled ? netPnl : 0,
               order_id: sellOrder.id, 
-              status: sellFilled > 0 ? 'executed' : 'unfilled', 
+              status: sellWasFilled ? 'executed' : 'unfilled', 
               executed_at: new Date().toISOString(),
             }
           ]);
           
-          const emoji = netPnl >= 0 ? '💰' : '❌';
+          const emoji = !sellWasFilled ? '⏸️' : netPnl >= 0 ? '💰' : '❌';
           console.log(`${emoji} [${cycle}] ${best.strat} ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%) in ${Date.now() - cycleStart}ms`);
           results.push({ t: cycle, s: best.symbol, a: best.strat, e: best.edge, p: netPnlPct });
           
@@ -1927,10 +1943,9 @@ serve(async (req) => {
         assets: endLiquidation.assets,
       },
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-
   } catch (error) {
     // ===== ERROR HANDLER: EMERGENCY LIQUIDATION =====
-    console.error('❌ Fatal error - triggering emergency liquidation...');
+    console.error('Fatal error - triggering emergency liquidation...');
     
     const key = Deno.env.get('GATE_API_KEY');
     const secret = Deno.env.get('GATE_API_SECRET');
@@ -1941,6 +1956,14 @@ serve(async (req) => {
       emergencyResult = await emergencyLiquidateAll(key, secret, `FATAL_ERROR: ${error instanceof Error ? error.message : 'Unknown'}`, supabase);
     }
     
+    return new Response(JSON.stringify({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown',
+      duration: Date.now() - start,
+      emergencyLiquidation: emergencyResult,
+    }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+});
     return new Response(JSON.stringify({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown',
