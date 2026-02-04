@@ -40,6 +40,13 @@ const CONFIG = {
   
   // Cooldown to avoid repeat losses
   cooldownSeconds: 30,
+  
+  // ===== EXCHANGE-SIDE PROTECTION =====
+  // Stop-Loss and Take-Profit placed on Gate.io immediately after each buy
+  stopLossPct: 1.5,        // -1.5% Stop-Loss (exchange-side protection)
+  takeProfitPct: 3.0,      // +3% Take-Profit target
+  trailingStopPct: 1.0,    // 1% trailing distance after TP1
+  useExchangeOrders: true, // Place SL/TP orders on Gate.io (not just software)
 };
 
 // ===== GATE.IO API =====
@@ -59,6 +66,109 @@ async function gate(method: string, endpoint: string, key: string, secret: strin
   });
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+// ===== EXCHANGE-SIDE STOP-LOSS & TAKE-PROFIT =====
+// Place protective orders directly on Gate.io that will execute even if bot crashes
+
+interface ExchangeProtection {
+  stopLossOrderId?: string;
+  takeProfitOrderId?: string;
+  symbol: string;
+  amount: string;
+  stopPrice: number;
+  tpPrice: number;
+}
+
+async function placeExchangeProtection(
+  key: string, 
+  secret: string, 
+  symbol: string, 
+  amount: number, 
+  entryPrice: number,
+  precision: number
+): Promise<ExchangeProtection> {
+  const amountStr = amount.toFixed(precision);
+  const stopPrice = entryPrice * (1 - CONFIG.stopLossPct / 100);
+  const tpPrice = entryPrice * (1 + CONFIG.takeProfitPct / 100);
+  
+  console.log(`🛡️ Placing exchange protection for ${symbol}: SL@$${stopPrice.toFixed(6)} TP@$${tpPrice.toFixed(6)}`);
+  
+  const protection: ExchangeProtection = {
+    symbol,
+    amount: amountStr,
+    stopPrice,
+    tpPrice,
+  };
+  
+  try {
+    // ===== STOP-LOSS ORDER (Price Triggered) =====
+    // Gate.io API: /spot/price_orders for conditional orders
+    // account should be "normal" (classic) or "unified" (unified trading account)
+    const slOrder = await gate('POST', '/spot/price_orders', key, secret, {
+      trigger: {
+        price: stopPrice.toFixed(8),
+        rule: '<=',      // Trigger when price drops TO or BELOW stop price
+        expiration: 86400 * 7, // 7 days expiration
+      },
+      put: {
+        type: 'market',
+        side: 'sell',
+        amount: amountStr,
+        account: 'normal', // Use 'normal' for classic spot account
+      },
+      market: symbol,
+    }) as { id?: string };
+    
+    if (slOrder.id) {
+      protection.stopLossOrderId = slOrder.id;
+      console.log(`✅ Stop-Loss placed: ${slOrder.id} @ $${stopPrice.toFixed(6)} (-${CONFIG.stopLossPct}%)`);
+    }
+  } catch (e) {
+    console.log(`⚠️ Stop-Loss order failed: ${e instanceof Error ? e.message : 'Unknown'}`);
+  }
+  
+  try {
+    // ===== TAKE-PROFIT ORDER (Limit Sell) =====
+    // Place as regular limit order at target price
+    const tpOrder = await gate('POST', '/spot/orders', key, secret, {
+      currency_pair: symbol, 
+      side: 'sell', 
+      type: 'limit',
+      amount: amountStr, 
+      price: tpPrice.toFixed(8),
+      time_in_force: 'gtc', // Good till cancelled
+    }) as { id?: string };
+    
+    if (tpOrder.id) {
+      protection.takeProfitOrderId = tpOrder.id;
+      console.log(`✅ Take-Profit placed: ${tpOrder.id} @ $${tpPrice.toFixed(6)} (+${CONFIG.takeProfitPct}%)`);
+    }
+  } catch (e) {
+    console.log(`⚠️ Take-Profit order failed: ${e instanceof Error ? e.message : 'Unknown'}`);
+  }
+  
+  return protection;
+}
+
+// Cancel protection orders when position is closed
+async function cancelProtection(key: string, secret: string, protection: ExchangeProtection) {
+  if (protection.stopLossOrderId) {
+    try {
+      await gate('DELETE', `/spot/price_orders/${protection.stopLossOrderId}`, key, secret);
+      console.log(`🗑️ Cancelled SL order: ${protection.stopLossOrderId}`);
+    } catch (e) {
+      // May already be triggered/cancelled
+    }
+  }
+  if (protection.takeProfitOrderId) {
+    try {
+      await gate('DELETE', `/spot/orders/${protection.takeProfitOrderId}`, key, secret, { currency_pair: protection.symbol });
+      console.log(`🗑️ Cancelled TP order: ${protection.takeProfitOrderId}`);
+    } catch (e) {
+      // May already be filled/cancelled
+    }
+  }
 }
 
 async function getBalances(key: string, secret: string): Promise<Map<string, number>> {
@@ -115,7 +225,7 @@ serve(async (req) => {
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const start = Date.now();
-  const results: Array<{ t: number; s?: string; a: string; e?: number; p?: number }> = [];
+  const results: Array<{ t: number; s?: string; a: string; e?: number; p?: number; sl?: string; tp?: string }> = [];
   let trades = 0, pnl = 0;
 
   try {
@@ -343,10 +453,10 @@ serve(async (req) => {
           continue;
         }
 
-        // Execute - ALL trades are instant Buy+Sell (no open positions!)
+        // Execute - BUY + PLACE EXCHANGE PROTECTION (SL/TP on Gate.io)
         try {
           const amountStr = amount.toFixed(best.prec);
-          console.log(`⚡ [${cycle}] ${best.strat} ${best.symbol}: Buy+Sell instantly | Edge=${best.edge.toFixed(3)}%`);
+          console.log(`⚡ [${cycle}] ${best.strat} ${best.symbol}: Buy + Place SL/TP | Edge=${best.edge.toFixed(3)}%`);
           
           // ===== STEP 1: BUY =====
           const buyOrder = await gate('POST', '/spot/orders', key, secret, {
@@ -371,45 +481,84 @@ serve(async (req) => {
           // Calculate actual bought amount from USDT filled
           const boughtAmount = buyFilled / buyPrice;
           
-          // ===== STEP 2: SELL IMMEDIATELY - No waiting! =====
-          const sellAmt = (boughtAmount * 0.998).toFixed(best.prec); // Minus fees
+          // ===== STEP 2: PLACE EXCHANGE-SIDE PROTECTION =====
+          // These orders stay on Gate.io and execute even if bot crashes!
+          if (CONFIG.useExchangeOrders) {
+            const protection = await placeExchangeProtection(
+              key, secret, 
+              best.symbol, 
+              boughtAmount * 0.998, // Account for fees
+              buyPrice,
+              best.prec
+            );
+            
+            // Log the buy with protection info
+            await supabase.from('trade_history').insert({
+              symbol: best.symbol, 
+              side: 'buy', 
+              type: `${best.strat}_PROTECTED`,
+              amount: boughtAmount,
+              price: buyPrice, 
+              expected_edge: best.edge, 
+              actual_pnl: 0,
+              order_id: buyOrder.id, 
+              status: protection.stopLossOrderId ? 'protected' : 'unprotected', 
+              executed_at: new Date().toISOString(),
+            });
+            
+            const slStatus = protection.stopLossOrderId ? '✅' : '❌';
+            const tpStatus = protection.takeProfitOrderId ? '✅' : '❌';
+            console.log(`🛡️ [${cycle}] ${best.symbol} PROTECTED | SL:${slStatus}@$${protection.stopPrice.toFixed(4)} TP:${tpStatus}@$${protection.tpPrice.toFixed(4)}`);
+            
+            trades++;
+            results.push({ 
+              t: cycle, 
+              s: best.symbol, 
+              a: 'buy_protected', 
+              e: best.edge, 
+              sl: protection.stopLossOrderId,
+              tp: protection.takeProfitOrderId,
+            });
+          } else {
+            // Fallback: Instant sell (old behavior)
+            const sellAmt = (boughtAmount * 0.998).toFixed(best.prec);
+            
+            const sellOrder = await gate('POST', '/spot/orders', key, secret, {
+              currency_pair: best.symbol, 
+              side: 'sell', 
+              type: 'market',
+              amount: sellAmt, 
+              time_in_force: 'ioc',
+            }) as { id?: string; avg_deal_price?: string; filled_total?: string };
+            
+            const sellFilled = parseFloat(sellOrder.filled_total || '0');
+            const sellPrice = parseFloat(sellOrder.avg_deal_price || best.price.toString());
+            
+            const netPnl = sellFilled - buyFilled;
+            const netPnlPct = (netPnl / buyFilled) * 100;
+            
+            trades += 2;
+            pnl += netPnlPct;
+            
+            await supabase.from('trade_history').insert([
+              {
+                symbol: best.symbol, side: 'buy', type: best.strat, amount: boughtAmount,
+                price: buyPrice, expected_edge: best.edge, actual_pnl: 0,
+                order_id: buyOrder.id, status: 'executed', executed_at: new Date().toISOString(),
+              },
+              {
+                symbol: best.symbol, side: 'sell', type: best.strat, amount: parseFloat(sellAmt),
+                price: sellPrice, expected_edge: best.edge, actual_pnl: netPnl,
+                order_id: sellOrder.id, status: 'executed', executed_at: new Date().toISOString(),
+              }
+            ]);
+            
+            const emoji = netPnl >= 0 ? '✅' : '❌';
+            console.log(`${emoji} [${cycle}] ${best.strat} ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%)`);
+            results.push({ t: cycle, s: best.symbol, a: best.strat, e: best.edge, p: netPnlPct });
+          }
           
-          const sellOrder = await gate('POST', '/spot/orders', key, secret, {
-            currency_pair: best.symbol, 
-            side: 'sell', 
-            type: 'market',
-            amount: sellAmt, 
-            time_in_force: 'ioc',
-          }) as { id?: string; avg_deal_price?: string; filled_total?: string };
-          
-          const sellFilled = parseFloat(sellOrder.filled_total || '0');
-          const sellPrice = parseFloat(sellOrder.avg_deal_price || best.price.toString());
-          
-          // Calculate actual P&L (USDT out - USDT in)
-          const netPnl = sellFilled - buyFilled;
-          const netPnlPct = (netPnl / buyFilled) * 100;
-          
-          trades += 2;
-          pnl += netPnlPct;
           recentSymbols.set(best.symbol, Date.now());
-          
-          // Log both trades
-          await supabase.from('trade_history').insert([
-            {
-              symbol: best.symbol, side: 'buy', type: best.strat, amount: boughtAmount,
-              price: buyPrice, expected_edge: best.edge, actual_pnl: 0,
-              order_id: buyOrder.id, status: 'executed', executed_at: new Date().toISOString(),
-            },
-            {
-              symbol: best.symbol, side: 'sell', type: best.strat, amount: parseFloat(sellAmt),
-              price: sellPrice, expected_edge: best.edge, actual_pnl: netPnl,
-              order_id: sellOrder.id, status: 'executed', executed_at: new Date().toISOString(),
-            }
-          ]);
-          
-          const emoji = netPnl >= 0 ? '✅' : '❌';
-          console.log(`${emoji} [${cycle}] ${best.strat} ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%)`);
-          results.push({ t: cycle, s: best.symbol, a: best.strat, e: best.edge, p: netPnlPct });
 
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Unknown';
