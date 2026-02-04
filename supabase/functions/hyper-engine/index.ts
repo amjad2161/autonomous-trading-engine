@@ -7,57 +7,93 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== ULTRA-WIDE SCAN CONFIG =====
-// Scan ALL 2,500+ pairs on Gate.io - no restrictions!
+// ===== MARATHON MODE: 100K SUCCESSFUL TRADES =====
+// Phase 1: Ultra-fast micro-profits (0-25K trades)
+// Phase 2: Fast small-profits (25K-50K trades)  
+// Phase 3: Medium speed, medium profit (50K-75K trades)
+// Phase 4: Slower, higher profit trades (75K-100K trades)
+
+const MARATHON_GOAL = 100_000; // Target: 100K successful trades!
+
+// Adaptive config based on marathon progress
+function getMarathonConfig(successfulTrades: number) {
+  const progress = successfulTrades / MARATHON_GOAL; // 0 to 1
+  
+  // Phase determines speed vs profit tradeoff
+  const phase = progress < 0.25 ? 1 : progress < 0.50 ? 2 : progress < 0.75 ? 3 : 4;
+  
+  // Cycle interval: starts at 300ms, ends at 2000ms
+  const cycleIntervalMs = Math.round(300 + (progress * 1700));
+  
+  // Min edge: starts at 0.01%, ends at 0.3%
+  const baseMinEdge = 0.01 + (progress * 0.29);
+  
+  // Wait time between buy/sell: starts at 50ms, ends at 500ms
+  const tradeWaitMs = Math.round(50 + (progress * 450));
+  
+  // Position size: starts small, grows as we succeed
+  const basePositionPct = 10 + (progress * 10); // 10% -> 20%
+  
+  console.log(`🏃 MARATHON Phase ${phase} | ${successfulTrades.toLocaleString()}/${MARATHON_GOAL.toLocaleString()} (${(progress*100).toFixed(2)}%) | Speed=${cycleIntervalMs}ms | MinEdge=${baseMinEdge.toFixed(3)}%`);
+  
+  return {
+    phase,
+    cycleIntervalMs,
+    baseMinEdge,
+    tradeWaitMs,
+    basePositionPct,
+    progress,
+  };
+}
+
 const BASE_CONFIG = {
-  // ULTRA-LOW thresholds - catch every tiny opportunity!
-  baseMinEdge: 0.01,         // 0.01% edge is enough for rapid trades!
-  baseMinVolume: 10_000,     // Very low volume requirement - more pairs!
-  baseMaxSpread: 1.0,        // Accept wider spreads - more opportunities!
+  // These get overridden by marathon config
+  baseMinEdge: 0.01,
+  baseMinVolume: 5_000,       // Ultra-low volume - more pairs!
+  baseMaxSpread: 2.0,         // Accept any spread
   
-  // Strategy thresholds - more sensitive
-  momentumMinChange: 0.5,    // Lower threshold - catch more momentum
-  momentumMaxChange: 50,     // Higher max - catch pumps
-  reversionMinDrop: -1.0,    // Smaller drops qualify
-  reversionMaxDrop: -50,     // Bigger drops too
+  // Strategy thresholds - super sensitive for volume
+  momentumMinChange: 0.3,     // Very small moves count
+  momentumMaxChange: 100,     // Catch everything
+  reversionMinDrop: -0.5,
+  reversionMaxDrop: -100,
   
-  // Position sizing - PRECISE ADAPTIVE SYSTEM
-  minPositionUsdt: 3,        // Gate.io absolute minimum
-  maxPositionUsdt: 50,       // Maximum per trade
-  basePositionPct: 15,       // 15% of available balance per trade
+  // Position sizing
+  minPositionUsdt: 3,
+  maxPositionUsdt: 30,        // Smaller positions for speed
+  basePositionPct: 10,
   smallBalanceThreshold: 10,
   mediumBalanceThreshold: 50,
   largeBalanceThreshold: 200,
   
-  // ULTRA-FAST operation - no waiting!
-  burstDurationMs: 58000,    // Run almost full minute
-  cycleIntervalMs: 500,      // 500ms between cycles = 2 trades/second possible!
+  // MARATHON timing - ultra fast!
+  burstDurationMs: 58000,
+  cycleIntervalMs: 300,       // 3 trades/second max!
   
   // Auto-liquidation
   liquidateThreshold: 3,
   minDustValue: 0.1,
   
-  // MINIMAL exclusions - scan EVERYTHING!
-  excludeSymbols: ['USDT_USDT'],  // Only exclude impossible pairs
-  excludePatterns: ['3L', '5L', '3S', '5S', '2L', '2S', 'BULL', 'BEAR'],  // Leveraged only
+  // Scan EVERYTHING
+  excludeSymbols: ['USDT_USDT'],
+  excludePatterns: ['3L', '5L', '3S', '5S', '2L', '2S', 'BULL', 'BEAR'],
   stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD'],
   
-  // NO priority pairs - ALL pairs are equal!
   scanAllPairs: true,
-  priorityBoost: 1.0,        // No boost - equal opportunity
+  priorityBoost: 1.0,
   
-  // NEVER STOP - continuous trading 24/7
-  cooldownSeconds: 0,        // No cooldown between same pair
+  // NEVER STOP
+  cooldownSeconds: 0,
   maxConsecutiveLosses: 999,
   lossStreakCooldownMs: 0,
   minWinRateToTrade: 0,
   recentTradesToCheck: 0,
   
-  // Minimal protection for rapid trades
-  baseStopLoss: 2.0,         // Wider stop for volatile pairs
-  baseTakeProfit: 0.5,       // Take profit fast!
-  trailingStopPct: 0.3,
-  useExchangeOrders: false,  // No exchange orders - instant in/out only!
+  // Quick protection
+  baseStopLoss: 3.0,
+  baseTakeProfit: 0.3,        // Take tiny profits fast!
+  trailingStopPct: 0.2,
+  useExchangeOrders: false,
 };
 
 // ===== DYNAMIC PARAMETER ENGINE =====
@@ -600,40 +636,53 @@ serve(async (req) => {
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    console.log(`🚀 [HYPER-MAX:${instanceId}] Starting DYNAMIC ADAPTIVE 24/7 mode`);
+    // ===== MARATHON MODE: Count successful trades =====
+    const { count: successfulTradesCount } = await supabase
+      .from('trade_history')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'executed')
+      .gt('actual_pnl', 0);
+    
+    const successfulTrades = successfulTradesCount || 0;
+    const marathonConfig = getMarathonConfig(successfulTrades);
+    
+    console.log(`🚀 [HYPER-MARATHON:${instanceId}] Phase ${marathonConfig.phase} | ${successfulTrades.toLocaleString()} wins towards ${MARATHON_GOAL.toLocaleString()}`);
 
     // Get pair info once
     const pairs = await getPairs();
-    const recentSymbols = new Map<string, number>(); // symbol -> timestamp
-    const failedSymbols = new Set<string>(); // Track symbols that failed
+    const recentSymbols = new Map<string, number>();
+    const failedSymbols = new Set<string>();
 
     let cycle = 0;
     const endTime = start + CONFIG.burstDurationMs;
+    
+    // Use marathon-adjusted cycle interval
+    const cycleInterval = marathonConfig.cycleIntervalMs;
 
-    // ===== CONTINUOUS LOOP =====
+    // ===== MARATHON CONTINUOUS LOOP =====
     while (Date.now() < endTime) {
       cycle++;
       const cycleStart = Date.now();
 
       try {
-        // Get fresh balances and tickers
         const balances = await getBalances(key, secret);
         const tickers = await getTickers();
         let usdt = balances.get('USDT') || 0;
         
-        // ===== DYNAMIC PARAMETER CALCULATION =====
+        // Dynamic params with marathon override
         const marketState = analyzeMarket(tickers);
         const performanceState = await getPerformanceState(supabase);
         const dynamicParams = calculateDynamicParams(marketState, performanceState);
         
-        // Log dynamic parameters every 10 cycles
-        if (cycle % 10 === 1) {
-          console.log(`🎛️ DYNAMIC PARAMS | Edge=${dynamicParams.minEdge.toFixed(2)}% | SL=${dynamicParams.stopLossPct.toFixed(1)}% | TP=${dynamicParams.takeProfitPct.toFixed(1)}% | Pos=${dynamicParams.positionPct}% | Regime=${dynamicParams.regime} (${dynamicParams.aggressiveness})`);
-          console.log(`📈 MARKET | Vol=${marketState.avgVolatility.toFixed(1)}% | BTC=${marketState.btcChange.toFixed(1)}% | Trend=${marketState.marketTrend} | Spread=${(marketState.spreadHealth*100).toFixed(0)}%`);
-          console.log(`📊 PERF | WinRate=${performanceState.recentWinRate.toFixed(0)}% | Wins=${performanceState.consecutiveWins} | Losses=${performanceState.consecutiveLosses}`);
+        // Override with marathon config
+        dynamicParams.minEdge = Math.max(dynamicParams.minEdge * 0.5, marathonConfig.baseMinEdge);
+        dynamicParams.positionPct = marathonConfig.basePositionPct;
+        
+        if (cycle % 20 === 1) {
+          console.log(`🏃 MARATHON ${successfulTrades}/${MARATHON_GOAL} | Phase ${marathonConfig.phase} | Speed=${cycleInterval}ms | Edge=${dynamicParams.minEdge.toFixed(3)}%`);
         }
         
-        console.log(`💰 [${cycle}] USDT: $${usdt.toFixed(2)} | ${dynamicParams.regime}`);
+        console.log(`💰 [${cycle}] $${usdt.toFixed(2)} | Phase ${marathonConfig.phase}`);
 
 
         // ===== FORCE-LIQUIDITY: Smart liquidation to maintain USDT =====
@@ -1059,11 +1108,12 @@ serve(async (req) => {
           
           console.log(`✅ BUY: ${buyFilledAmount.toFixed(best.prec)} @ $${buyPrice.toFixed(6)} = $${buyFilled.toFixed(2)}`);
           
-          // ===== STEP 2: WAIT FOR MICRO-MOMENTUM =====
-          // Give the price a moment to move in our favor
-          // Momentum trades need time to develop
-          const waitTime = best.strat === 'M' || best.strat === 'PUMP' ? 200 : 
-                           best.strat === 'R' || best.strat === 'DIP' ? 300 : 100;
+          // ===== STEP 2: MARATHON-ADJUSTED WAIT =====
+          // Wait time increases as marathon progresses (faster trades early, slower later)
+          const baseWait = best.strat === 'M' || best.strat === 'PUMP' ? 100 : 
+                           best.strat === 'R' || best.strat === 'DIP' ? 150 : 50;
+          const marathonWait = marathonConfig.tradeWaitMs;
+          const waitTime = Math.max(baseWait, marathonWait);
           await new Promise(r => setTimeout(r, waitTime));
           
           // Get fresh price before selling
@@ -1147,9 +1197,9 @@ serve(async (req) => {
         results.push({ t: cycle, a: 'err' });
       }
 
-      // Wait for next cycle
+      // Wait for next cycle - use marathon-adjusted interval!
       const elapsed = Date.now() - cycleStart;
-      const wait = Math.max(0, CONFIG.cycleIntervalMs - elapsed);
+      const wait = Math.max(0, cycleInterval - elapsed);
       if (wait > 0 && Date.now() + wait < endTime) {
         await new Promise(r => setTimeout(r, wait));
       }
