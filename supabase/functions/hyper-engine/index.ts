@@ -23,8 +23,8 @@ const CONFIG = {
   reversionMaxDrop: -15,
   
   // Position sizing
-  basePositionUsdt: 10,
-  minPositionUsdt: 5,
+  basePositionUsdt: 8,
+  minPositionUsdt: 3.5, // Gate.io minimum is $3, use $3.5 for safety
   maxPositionUsdt: 50,
   
   // Risk management
@@ -35,7 +35,8 @@ const CONFIG = {
   maxDailyLossPct: 5.0, // Stop trading if daily loss exceeds 5%
   
   // Auto-liquidation settings
-  minDustValueUsdt: 0.5, // Minimum value to consider for liquidation
+  minDustValueUsdt: 0.3, // Lower threshold to liquidate more dust
+  liquidateIfUsdtBelow: 15, // Liquidate holdings if USDT drops below this
   
   // Filters
   excludeSymbols: ['USDT_USDT', 'USDC_USDT', 'DAI_USDT'],
@@ -446,11 +447,15 @@ serve(async (req) => {
       console.log(`📦 Other holdings: ${otherHoldings.map(h => `${h.currency}:${h.available.toFixed(4)}`).join(', ')}`);
     }
 
-    // AUTO-LIQUIDATE if USDT is too low but we have other assets
+    // AUTO-LIQUIDATE: Be more aggressive - liquidate if USDT is below threshold OR very low
     let finalUsdtBalance = usdtBalance;
     
-    if (usdtBalance < CONFIG.minPositionUsdt && otherHoldings.length > 0 && !paperMode) {
-      console.log(`🔄 USDT below minimum, attempting auto-liquidation...`);
+    const shouldLiquidate = (usdtBalance < CONFIG.liquidateIfUsdtBelow || usdtBalance < CONFIG.minPositionUsdt * 2) 
+      && otherHoldings.length > 0 
+      && !paperMode;
+    
+    if (shouldLiquidate) {
+      console.log(`🔄 USDT ($${usdtBalance.toFixed(2)}) below threshold ($${CONFIG.liquidateIfUsdtBelow}), liquidating assets...`);
       
       liquidationResult = await autoLiquidate(apiKey, apiSecret, otherHoldings, prices, pairInfo);
       
@@ -498,13 +503,44 @@ serve(async (req) => {
       });
     }
 
-    // Calculate position size
+    // Calculate position size - use 60-80% of balance for more aggressive trading
     const positionSize = Math.min(
-      Math.max(finalUsdtBalance * 0.1, CONFIG.minPositionUsdt),
+      Math.max(finalUsdtBalance * 0.7, CONFIG.minPositionUsdt), // Use 70% of balance
       CONFIG.maxPositionUsdt,
-      finalUsdtBalance * 0.5
+      finalUsdtBalance * 0.85 // Cap at 85% of balance
     );
-    console.log(`📊 Position size: $${positionSize.toFixed(2)}`);
+    console.log(`📊 Position size: $${positionSize.toFixed(2)} (balance: $${finalUsdtBalance.toFixed(2)})`);
+
+    // Verify position size meets minimum
+    if (positionSize < CONFIG.minPositionUsdt) {
+      console.log(`⚠️ Position size too small ($${positionSize.toFixed(2)} < $${CONFIG.minPositionUsdt})`);
+      cycleStatus = 'skipped_position_too_small';
+      
+      const nowIso = new Date().toISOString();
+      if (state?.id) {
+        await supabase
+          .from('trading_system_state')
+          .update({
+            is_active: true,
+            total_cycles: cycleCount,
+            last_heartbeat: nowIso,
+            updated_at: nowIso,
+          })
+          .eq('id', state.id);
+      }
+      
+      return new Response(JSON.stringify({
+        success: true,
+        cycle: cycleCount,
+        status: cycleStatus,
+        balance: finalUsdtBalance,
+        positionSize,
+        message: `Position size $${positionSize.toFixed(2)} too small`,
+        duration: Date.now() - startTime,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     // Get recent trades for cooldown
     const { data: recentTrades } = await supabase
@@ -543,10 +579,16 @@ serve(async (req) => {
         if (bid <= 0 || ask <= 0) return false;
         if (isLeveragedToken(symbol)) return false;
         
+        const price = parseFloat(t.last);
         const info = pairInfo.get(symbol);
+        const GATE_MIN_ORDER = 3.5; // Gate.io minimum is $3, use $3.5 for safety
+        
         if (info) {
-          const minOrderValue = info.minAmount * parseFloat(t.last);
+          const minOrderValue = Math.max(info.minAmount * price, GATE_MIN_ORDER);
           if (minOrderValue > positionSize) return false;
+        } else {
+          // No pair info - ensure we can at least meet $3.5 minimum
+          if (price > positionSize) return false;
         }
         
         return true;
@@ -571,11 +613,14 @@ serve(async (req) => {
           edge = Math.abs(change) * 0.12 - spread - 0.1;
           side = 'buy';
           strategy = 'reversion-long';
-        } else if (change > CONFIG.momentumMaxChange && change < 30) {
-          edge = change * 0.04 - spread - 0.1;
-          side = 'sell';
-          strategy = 'fade-pump';
         }
+        // DISABLED: fade-pump strategy requires ability to short-sell
+        // which is not available on spot markets without margin
+        // else if (change > CONFIG.momentumMaxChange && change < 30) {
+        //   edge = change * 0.04 - spread - 0.1;
+        //   side = 'sell';
+        //   strategy = 'fade-pump';
+        // }
         
         const info = pairInfo.get(t.currency_pair);
         
@@ -605,27 +650,67 @@ serve(async (req) => {
       
       console.log(`🎯 Best: ${best.symbol} | ${best.strategy} | Edge: ${best.edge.toFixed(2)}%`);
       
-      let amount = positionSize / best.price;
+      // Calculate the correct amount based on position size and price
+      const GATE_MIN_ORDER_USDT = 3.5; // Gate.io minimum with buffer
+      
+      // Determine target order value (ensure it's at least the minimum)
+      const targetOrderValue = Math.max(positionSize, GATE_MIN_ORDER_USDT);
+      
+      // Calculate amount needed
+      let amount = targetOrderValue / best.price;
+      
+      // Ensure we meet the pair's minimum amount
       if (amount < best.minAmount) {
-        amount = best.minAmount * 1.1;
+        amount = best.minAmount * 1.05; // Add 5% buffer
       }
       
+      // Round to precision
       const multiplier = Math.pow(10, best.amountPrecision);
       amount = Math.floor(amount * multiplier) / multiplier;
       
-      const amountStr = amount.toFixed(best.amountPrecision);
-      const orderValue = amount * best.price;
+      // If rounding brought us below minimum, round UP instead
+      if (amount < best.minAmount) {
+        amount = Math.ceil(best.minAmount * multiplier) / multiplier;
+      }
       
-      console.log(`📦 Order: ${amountStr} ${best.symbol.split('_')[0]} (~$${orderValue.toFixed(2)})`);
+      // Calculate final order value
+      const finalOrderValue = amount * best.price;
+      
+      // Skip if order exceeds balance
+      if (finalOrderValue > finalUsdtBalance) {
+        console.log(`⚠️ Order $${finalOrderValue.toFixed(2)} exceeds balance $${finalUsdtBalance.toFixed(2)}, trying smaller amount...`);
+        
+        // Try with max affordable amount
+        const maxAffordable = Math.floor((finalUsdtBalance * 0.95) / best.price * multiplier) / multiplier;
+        if (maxAffordable >= best.minAmount && maxAffordable * best.price >= GATE_MIN_ORDER_USDT) {
+          amount = maxAffordable;
+          console.log(`📏 Adjusted to affordable amount: ${amount.toFixed(best.amountPrecision)}`);
+        } else {
+          console.log(`⚠️ Cannot afford even minimum order for ${best.symbol}`);
+          // Try next opportunity
+        }
+      }
+      
+      const orderValueFinal = amount * best.price;
+      const amountStr = amount.toFixed(best.amountPrecision);
+      
+      console.log(`📦 Order: ${amountStr} ${best.symbol.split('_')[0]} (~$${orderValueFinal.toFixed(2)})`);
       
       let orderId: string | undefined;
       let executedPrice = best.price;
       let orderStatus = paperMode ? 'simulated' : 'pending';
       
       if (!paperMode) {
-        if (orderValue > finalUsdtBalance) {
-          console.log(`⚠️ Order value exceeds balance, skipping`);
+        // Check if order value is valid
+        if (orderValueFinal > finalUsdtBalance) {
+          console.log(`⚠️ Order value $${orderValueFinal.toFixed(2)} exceeds balance $${finalUsdtBalance.toFixed(2)}, skipping`);
           orderStatus = 'skipped_balance';
+        } else if (orderValueFinal < GATE_MIN_ORDER_USDT) {
+          console.log(`⚠️ Order value $${orderValueFinal.toFixed(2)} below Gate.io minimum $${GATE_MIN_ORDER_USDT}, skipping`);
+          orderStatus = 'skipped_min_order';
+        } else if (amount < best.minAmount) {
+          console.log(`⚠️ Amount ${amount} below pair minimum ${best.minAmount}, skipping`);
+          orderStatus = 'skipped_min_amount';
         } else {
           try {
             const orderBody = {
