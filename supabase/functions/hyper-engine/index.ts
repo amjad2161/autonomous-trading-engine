@@ -7,857 +7,288 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== STRATEGY PARAMETERS =====
+// ===== AGGRESSIVE BURST MODE CONFIG =====
 const CONFIG = {
-  // Entry conditions
-  minEdge: 0.5,
-  minVolume: 1_000_000,
-  maxSpread: 0.3,
-  
-  // Momentum strategy
-  momentumMinChange: 1.5,
-  momentumMaxChange: 12,
-  
-  // Mean reversion strategy
-  reversionMinDrop: -4,
-  reversionMaxDrop: -15,
-  
-  // Position sizing
-  basePositionUsdt: 8,
-  minPositionUsdt: 3.5, // Gate.io minimum is $3, use $3.5 for safety
+  minEdge: 0.35,
+  minVolume: 300_000,
+  maxSpread: 0.5,
+  momentumMinChange: 1.0,
+  momentumMaxChange: 18,
+  reversionMinDrop: -2.5,
+  reversionMaxDrop: -25,
+  basePositionUsdt: 10,
+  minPositionUsdt: 3.5,
   maxPositionUsdt: 50,
-  
-  // Risk management
-  takeProfitPct: 1.5,
-  stopLossPct: 1.0,
-  
-  // Kill-Switch settings
-  maxDailyLossPct: 5.0, // Stop trading if daily loss exceeds 5%
-  
-  // Auto-liquidation settings
-  minDustValueUsdt: 0.3, // Lower threshold to liquidate more dust
-  liquidateIfUsdtBelow: 15, // Liquidate holdings if USDT drops below this
-  
-  // Filters
+  maxDailyLossPct: 5.0,
+  minDustValueUsdt: 0.3,
+  liquidateIfUsdtBelow: 20,
   excludeSymbols: ['USDT_USDT', 'USDC_USDT', 'DAI_USDT'],
   excludePatterns: ['3L_USDT', '5L_USDT', '3S_USDT', '5S_USDT', '2L_USDT', '2S_USDT'],
   stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD', 'USDP', 'GUSD'],
-  
-  maxConcurrentTrades: 3,
-  cooldownMinutes: 5,
+  cooldownMinutes: 1,
+  burstIntervalMs: 2000,
+  burstDurationMs: 50000,
 };
 
-// ===== GATE.IO API HELPERS =====
-function generateSignature(
-  method: string,
-  path: string,
-  queryString: string,
-  body: string,
-  timestamp: string,
-  secret: string
-): string {
+function generateSignature(method: string, path: string, queryString: string, body: string, timestamp: string, secret: string): string {
   const hashedPayload = createHash("sha512").update(body).digest("hex");
-  const signatureString = `${method}\n${path}\n${queryString}\n${hashedPayload}\n${timestamp}`;
-  return createHmac("sha512", secret).update(signatureString).digest("hex");
+  return createHmac("sha512", secret).update(`${method}\n${path}\n${queryString}\n${hashedPayload}\n${timestamp}`).digest("hex");
 }
 
-async function gateRequest(
-  method: string,
-  endpoint: string,
-  apiKey: string,
-  apiSecret: string,
-  body: Record<string, unknown> | null = null,
-  queryParams: Record<string, string> = {}
-): Promise<unknown> {
-  const baseUrl = "https://api.gateio.ws";
+async function gateRequest(method: string, endpoint: string, apiKey: string, apiSecret: string, body: Record<string, unknown> | null = null): Promise<unknown> {
   const path = `/api/v4${endpoint}`;
-  const queryString = new URLSearchParams(queryParams).toString();
-  const fullUrl = queryString ? `${baseUrl}${path}?${queryString}` : `${baseUrl}${path}`;
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const bodyStr = body ? JSON.stringify(body) : "";
-  
-  const signature = generateSignature(method, path, queryString, bodyStr, timestamp, apiSecret);
-  
-  const headers: Record<string, string> = {
-    "KEY": apiKey,
-    "SIGN": signature,
-    "Timestamp": timestamp,
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-  };
-  
-  const response = await fetch(fullUrl, {
+  const response = await fetch(`https://api.gateio.ws${path}`, {
     method,
-    headers,
+    headers: { "KEY": apiKey, "SIGN": generateSignature(method, path, "", bodyStr, timestamp, apiSecret), "Timestamp": timestamp, "Content-Type": "application/json" },
     body: body ? bodyStr : undefined,
   });
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gate.io API error: ${response.status} - ${errorText}`);
-  }
-  
+  if (!response.ok) throw new Error(`Gate.io: ${response.status} - ${await response.text()}`);
   return response.json();
 }
 
-// Get all spot balances
-async function getAllBalances(apiKey: string, apiSecret: string): Promise<Array<{
-  currency: string;
-  available: number;
-  locked: number;
-}>> {
+async function getAllBalances(apiKey: string, apiSecret: string): Promise<Array<{ currency: string; available: number }>> {
   try {
-    const accounts = await gateRequest('GET', '/spot/accounts', apiKey, apiSecret) as Array<{
-      currency: string;
-      available: string;
-      locked: string;
-    }>;
-    
-    return accounts
-      .map(a => ({
-        currency: a.currency,
-        available: parseFloat(a.available),
-        locked: parseFloat(a.locked),
-      }))
-      .filter(a => a.available > 0 || a.locked > 0);
-  } catch (e) {
-    console.error('Failed to get balances:', e);
-    return [];
-  }
+    const accounts = await gateRequest('GET', '/spot/accounts', apiKey, apiSecret) as Array<{ currency: string; available: string }>;
+    return accounts.map(a => ({ currency: a.currency, available: parseFloat(a.available) })).filter(a => a.available > 0);
+  } catch { return []; }
 }
 
-// Get ticker prices for multiple symbols
-async function getTickerPrices(): Promise<Map<string, number>> {
+async function getTickerPrices(): Promise<Map<string, { price: number; change: number; volume: number; bid: number; ask: number }>> {
   try {
     const tickers = await fetch('https://api.gateio.ws/api/v4/spot/tickers').then(r => r.json()) as Array<{
-      currency_pair: string;
-      last: string;
+      currency_pair: string; last: string; change_percentage: string; quote_volume: string; highest_bid: string; lowest_ask: string;
     }>;
-    
-    const map = new Map<string, number>();
+    const map = new Map();
     for (const t of tickers) {
-      map.set(t.currency_pair, parseFloat(t.last));
+      map.set(t.currency_pair, { price: parseFloat(t.last), change: parseFloat(t.change_percentage), volume: parseFloat(t.quote_volume), bid: parseFloat(t.highest_bid), ask: parseFloat(t.lowest_ask) });
     }
     return map;
-  } catch (e) {
-    console.error('Failed to get ticker prices:', e);
-    return new Map();
-  }
+  } catch { return new Map(); }
 }
 
-// Get currency pair info
-async function getCurrencyPairs(): Promise<Map<string, { minAmount: number; amountPrecision: number }>> {
+async function getCurrencyPairs(): Promise<Map<string, { minAmount: number; precision: number }>> {
   try {
-    const pairs = await fetch('https://api.gateio.ws/api/v4/spot/currency_pairs').then(r => r.json()) as Array<{
-      id: string;
-      min_base_amount?: string;
-      amount_precision?: number;
-    }>;
-    
-    const map = new Map<string, { minAmount: number; amountPrecision: number }>();
-    for (const p of pairs) {
-      map.set(p.id, {
-        minAmount: parseFloat(p.min_base_amount || '0.0001'),
-        amountPrecision: p.amount_precision || 4,
-      });
-    }
+    const pairs = await fetch('https://api.gateio.ws/api/v4/spot/currency_pairs').then(r => r.json()) as Array<{ id: string; min_base_amount?: string; amount_precision?: number }>;
+    const map = new Map();
+    for (const p of pairs) map.set(p.id, { minAmount: parseFloat(p.min_base_amount || '0.0001'), precision: p.amount_precision || 4 });
     return map;
-  } catch (e) {
-    console.error('Failed to get currency pairs:', e);
-    return new Map();
-  }
+  } catch { return new Map(); }
 }
 
-// Auto-liquidate non-USDT holdings to USDT
-async function autoLiquidate(
-  apiKey: string, 
-  apiSecret: string,
-  balances: Array<{ currency: string; available: number }>,
-  prices: Map<string, number>,
-  pairInfo: Map<string, { minAmount: number; amountPrecision: number }>
-): Promise<{ liquidated: number; details: Array<{ currency: string; amount: number; valueUsdt: number; status: string }> }> {
-  const details: Array<{ currency: string; amount: number; valueUsdt: number; status: string }> = [];
-  let totalLiquidated = 0;
-  
-  for (const balance of balances) {
-    // Skip USDT and stablecoins
-    if (CONFIG.stablecoins.includes(balance.currency)) {
-      continue;
-    }
-    
-    // Check if there's a _USDT pair for this currency
-    const symbol = `${balance.currency}_USDT`;
-    const price = prices.get(symbol);
-    
-    if (!price) {
-      console.log(`⏭️ No USDT pair for ${balance.currency}, skipping`);
-      continue;
-    }
-    
-    const valueUsdt = balance.available * price;
-    
-    // Skip if value is too small
-    if (valueUsdt < CONFIG.minDustValueUsdt) {
-      console.log(`⏭️ ${balance.currency} value too small ($${valueUsdt.toFixed(4)}), skipping`);
-      continue;
-    }
-    
-    // Get pair info for precision
-    const info = pairInfo.get(symbol);
-    if (!info) {
-      console.log(`⏭️ No pair info for ${symbol}, skipping`);
-      continue;
-    }
-    
-    // Check if amount meets minimum
-    if (balance.available < info.minAmount) {
-      console.log(`⏭️ ${balance.currency} amount ${balance.available} below minimum ${info.minAmount}, skipping`);
-      details.push({ currency: balance.currency, amount: balance.available, valueUsdt, status: 'below_minimum' });
-      continue;
-    }
-    
-    // Round amount to precision
-    const multiplier = Math.pow(10, info.amountPrecision);
-    const sellAmount = Math.floor(balance.available * multiplier) / multiplier;
-    
-    if (sellAmount < info.minAmount) {
-      console.log(`⏭️ Rounded ${balance.currency} amount ${sellAmount} below minimum, skipping`);
-      details.push({ currency: balance.currency, amount: balance.available, valueUsdt, status: 'rounded_below_min' });
-      continue;
-    }
-    
-    try {
-      console.log(`💱 Liquidating ${sellAmount} ${balance.currency} (~$${valueUsdt.toFixed(2)})`);
-      
-      const orderBody = {
-        currency_pair: symbol,
-        side: 'sell',
-        type: 'market',
-        amount: sellAmount.toFixed(info.amountPrecision),
-        time_in_force: 'ioc',
-      };
-      
-      const result = await gateRequest('POST', '/spot/orders', apiKey, apiSecret, orderBody) as {
-        id?: string;
-        status?: string;
-        filled_total?: string;
-      };
-      
-      const filledUsdt = parseFloat(result.filled_total || '0');
-      totalLiquidated += filledUsdt;
-      
-      console.log(`✅ Sold ${balance.currency}: +$${filledUsdt.toFixed(2)} USDT`);
-      details.push({ currency: balance.currency, amount: sellAmount, valueUsdt: filledUsdt, status: 'sold' });
-      
-    } catch (e) {
-      const errorMsg = e instanceof Error ? e.message : 'Unknown error';
-      console.error(`❌ Failed to sell ${balance.currency}:`, errorMsg);
-      details.push({ currency: balance.currency, amount: balance.available, valueUsdt, status: 'failed' });
-    }
-  }
-  
-  return { liquidated: totalLiquidated, details };
-}
-
-// Check if symbol is a leveraged token
 function isLeveragedToken(symbol: string): boolean {
-  for (const pattern of CONFIG.excludePatterns) {
-    if (symbol.endsWith(pattern) || symbol.includes(pattern.replace('_USDT', ''))) {
-      return true;
-    }
-  }
-  const leveragedRegex = /\d+(L|S)_USDT$/;
-  return leveragedRegex.test(symbol);
+  return CONFIG.excludePatterns.some(p => symbol.includes(p.replace('_USDT', ''))) || /\d+(L|S)_USDT$/.test(symbol);
 }
 
-// Get today's P&L from trade history
 // deno-lint-ignore no-explicit-any
-async function getTodayPnL(supabase: any): Promise<{
-  totalPnL: number;
-  tradeCount: number;
-  startingBalance: number;
-}> {
+async function getTodayPnL(supabase: any): Promise<{ totalPnL: number; tradeCount: number }> {
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
-  
-  const { data: trades } = await supabase
-    .from('trade_history')
-    .select('actual_pnl, created_at')
-    .gte('created_at', todayStart.toISOString())
-    .order('created_at', { ascending: true });
-  
-  const tradesArray = trades as Array<{ actual_pnl: number | null; created_at: string }> | null;
-  const totalPnL = tradesArray?.reduce((sum, t) => sum + (t.actual_pnl || 0), 0) || 0;
-  const tradeCount = tradesArray?.length || 0;
-  
-  // Get the state at start of day (approximate from current balance minus today's P&L)
-  const { data: state } = await supabase
-    .from('trading_system_state')
-    .select('current_balance')
-    .limit(1)
-    .maybeSingle();
-  
-  const stateData = state as { current_balance: number | null } | null;
-  const currentBalance = stateData?.current_balance || 0;
-  const startingBalance = currentBalance - totalPnL;
-  
-  return { totalPnL, tradeCount, startingBalance };
-}
-
-// Check if kill-switch should be triggered (considering manual reset)
-function shouldTriggerKillSwitch(
-  todayPnL: number, 
-  startingBalance: number, 
-  killSwitchResetAt: string | null
-): boolean {
-  if (startingBalance <= 0) return false;
-  
-  // Check if kill-switch was manually reset today
-  if (killSwitchResetAt) {
-    const resetDate = new Date(killSwitchResetAt);
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-    
-    // If reset was done today, don't trigger kill-switch
-    if (resetDate >= todayStart) {
-      return false;
-    }
-  }
-  
-  const lossPct = (todayPnL / startingBalance) * -100;
-  return lossPct >= CONFIG.maxDailyLossPct;
+  const { data } = await supabase.from('trade_history').select('actual_pnl').gte('created_at', todayStart.toISOString());
+  const arr = data as Array<{ actual_pnl: number | null }> | null;
+  return { totalPnL: arr?.reduce((s, t) => s + (t.actual_pnl || 0), 0) || 0, tradeCount: arr?.length || 0 };
 }
 
 // ===== MAIN HANDLER =====
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-  );
-
+  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const startTime = Date.now();
-  let cycleStatus = 'completed';
-  let tradeResult: {
-    symbol: string;
-    side: string;
-    edge: number;
-    pnl: number;
-    strategy: string;
-    price: number;
-    orderId?: string;
-    status: string;
-  } | null = null;
-  let liquidationResult: { liquidated: number; details: unknown[] } | null = null;
+  const results: Array<{ cycle: number; symbol?: string; edge?: number; status: string }> = [];
+  let totalTrades = 0;
+  let totalPnL = 0;
 
   try {
-    const { paperMode = true } = await req.json().catch(() => ({}));
-    
-    console.log(`⚡ [HYPER] Cycle start (paper: ${paperMode})`);
-
+    const { paperMode = false, burstMode = true } = await req.json().catch(() => ({}));
     const apiKey = Deno.env.get('GATE_API_KEY');
     const apiSecret = Deno.env.get('GATE_API_SECRET');
-    
-    if (!apiKey || !apiSecret) {
-      throw new Error("Missing GATE_API_KEY or GATE_API_SECRET");
-    }
+    if (!apiKey || !apiSecret) throw new Error("Missing API credentials");
 
-    // Get current state
-    const { data: state } = await supabase
-      .from('trading_system_state')
-      .select('*')
-      .limit(1)
-      .maybeSingle();
+    console.log(`🚀 [HYPER] BURST MODE - 2s intervals, 50s duration`);
 
-    let cycleCount = (state?.total_cycles || 0) + 1;
-    let cumulativePnL = state?.total_pnl || 0;
-    let cumulativeTrades = state?.total_trades || 0;
-    
-    // Get kill_switch_reset_at from state (using type assertion for new column)
-    const stateTyped = state as { 
-      id: string;
-      kill_switch_reset_at?: string | null;
-      [key: string]: unknown;
-    } | null;
-    const killSwitchResetAt = stateTyped?.kill_switch_reset_at || null;
-
-    // ===== KILL-SWITCH CHECK =====
+    const { data: state } = await supabase.from('trading_system_state').select('*').limit(1).maybeSingle();
+    const stateTyped = state as { id?: string; total_cycles?: number; total_pnl?: number; total_trades?: number } | null;
     const todayStats = await getTodayPnL(supabase);
-    const killSwitchTriggered = shouldTriggerKillSwitch(todayStats.totalPnL, todayStats.startingBalance, killSwitchResetAt);
     
-    if (killSwitchTriggered) {
-      const lossPct = todayStats.startingBalance > 0 
-        ? ((todayStats.totalPnL / todayStats.startingBalance) * -100).toFixed(2) 
-        : '0';
-      
-      console.log(`🛑 [KILL-SWITCH] Trading halted! Daily loss: ${lossPct}% (threshold: ${CONFIG.maxDailyLossPct}%)`);
-      console.log(`📊 Today's P&L: $${todayStats.totalPnL.toFixed(2)} | Trades: ${todayStats.tradeCount}`);
-      
-      // Update heartbeat but don't trade
-      const nowIso = new Date().toISOString();
-      if (state?.id) {
-        await supabase
-          .from('trading_system_state')
-          .update({
-            is_active: false, // Mark as inactive due to kill-switch
-            total_cycles: cycleCount,
-            last_heartbeat: nowIso,
-            updated_at: nowIso,
-          })
-          .eq('id', state.id);
-      }
-      
-      return new Response(JSON.stringify({
-        success: true,
-        cycle: cycleCount,
-        status: 'kill_switch_triggered',
-        killSwitch: {
-          triggered: true,
-          dailyPnL: todayStats.totalPnL,
-          dailyLossPct: parseFloat(lossPct),
-          threshold: CONFIG.maxDailyLossPct,
-          tradeCount: todayStats.tradeCount,
-        },
-        message: `Trading halted: Daily loss ${lossPct}% exceeds ${CONFIG.maxDailyLossPct}% threshold`,
-        duration: Date.now() - startTime,
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    // ===== AUTO-LIQUIDATE AT START =====
+    const pairInfo = await getCurrencyPairs();
+    const allBalances = await getAllBalances(apiKey, apiSecret);
+    let usdtBalance = allBalances.find(b => b.currency === 'USDT')?.available || 0;
+    const holdings = allBalances.filter(b => !CONFIG.stablecoins.includes(b.currency));
     
-    console.log(`✅ Kill-switch OK: Today's P&L $${todayStats.totalPnL.toFixed(2)} (${todayStats.tradeCount} trades)`);
-
-    // Get all data in parallel
-    const [balances, prices, pairInfo] = await Promise.all([
-      getAllBalances(apiKey, apiSecret),
-      getTickerPrices(),
-      getCurrencyPairs(),
-    ]);
-    
-    // Find USDT balance
-    const usdtBalance = balances.find(b => b.currency === 'USDT')?.available || 0;
-    console.log(`💰 Initial USDT: $${usdtBalance.toFixed(2)}`);
-    
-    // List other holdings
-    const otherHoldings = balances.filter(b => !CONFIG.stablecoins.includes(b.currency));
-    if (otherHoldings.length > 0) {
-      console.log(`📦 Other holdings: ${otherHoldings.map(h => `${h.currency}:${h.available.toFixed(4)}`).join(', ')}`);
-    }
-
-    // AUTO-LIQUIDATE: Be more aggressive - liquidate if USDT is below threshold OR very low
-    let finalUsdtBalance = usdtBalance;
-    
-    const shouldLiquidate = (usdtBalance < CONFIG.liquidateIfUsdtBelow || usdtBalance < CONFIG.minPositionUsdt * 2) 
-      && otherHoldings.length > 0 
-      && !paperMode;
-    
-    if (shouldLiquidate) {
-      console.log(`🔄 USDT ($${usdtBalance.toFixed(2)}) below threshold ($${CONFIG.liquidateIfUsdtBelow}), liquidating assets...`);
+    if (usdtBalance < CONFIG.liquidateIfUsdtBelow && holdings.length > 0) {
+      console.log(`🔄 Liquidating ${holdings.length} holdings (USDT: $${usdtBalance.toFixed(2)})`);
+      const prices = await getTickerPrices();
       
-      liquidationResult = await autoLiquidate(apiKey, apiSecret, otherHoldings, prices, pairInfo);
-      
-      if (liquidationResult.liquidated > 0) {
-        console.log(`💵 Total liquidated: +$${liquidationResult.liquidated.toFixed(2)} USDT`);
-        
-        // Re-fetch USDT balance after liquidation
-        const newBalances = await getAllBalances(apiKey, apiSecret);
-        finalUsdtBalance = newBalances.find(b => b.currency === 'USDT')?.available || 0;
-        console.log(`💰 New USDT balance: $${finalUsdtBalance.toFixed(2)}`);
-      } else {
-        console.log(`⚠️ No assets could be liquidated`);
-      }
-    }
-
-    // Check if we have enough to trade
-    if (finalUsdtBalance < CONFIG.minPositionUsdt) {
-      console.log(`⚠️ Insufficient balance after liquidation ($${finalUsdtBalance.toFixed(2)} < $${CONFIG.minPositionUsdt})`);
-      cycleStatus = 'skipped_low_balance';
-      
-      // Update heartbeat
-      const nowIso = new Date().toISOString();
-      if (state?.id) {
-        await supabase
-          .from('trading_system_state')
-          .update({
-            is_active: true,
-            total_cycles: cycleCount,
-            last_heartbeat: nowIso,
-            updated_at: nowIso,
-          })
-          .eq('id', state.id);
-      }
-
-      return new Response(JSON.stringify({
-        success: true,
-        cycle: cycleCount,
-        status: cycleStatus,
-        balance: finalUsdtBalance,
-        liquidation: liquidationResult,
-        message: 'No USDT and no liquidatable assets',
-        duration: Date.now() - startTime,
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Calculate position size - use 60-80% of balance for more aggressive trading
-    const positionSize = Math.min(
-      Math.max(finalUsdtBalance * 0.7, CONFIG.minPositionUsdt), // Use 70% of balance
-      CONFIG.maxPositionUsdt,
-      finalUsdtBalance * 0.85 // Cap at 85% of balance
-    );
-    console.log(`📊 Position size: $${positionSize.toFixed(2)} (balance: $${finalUsdtBalance.toFixed(2)})`);
-
-    // Verify position size meets minimum
-    if (positionSize < CONFIG.minPositionUsdt) {
-      console.log(`⚠️ Position size too small ($${positionSize.toFixed(2)} < $${CONFIG.minPositionUsdt})`);
-      cycleStatus = 'skipped_position_too_small';
-      
-      const nowIso = new Date().toISOString();
-      if (state?.id) {
-        await supabase
-          .from('trading_system_state')
-          .update({
-            is_active: true,
-            total_cycles: cycleCount,
-            last_heartbeat: nowIso,
-            updated_at: nowIso,
-          })
-          .eq('id', state.id);
-      }
-      
-      return new Response(JSON.stringify({
-        success: true,
-        cycle: cycleCount,
-        status: cycleStatus,
-        balance: finalUsdtBalance,
-        positionSize,
-        message: `Position size $${positionSize.toFixed(2)} too small`,
-        duration: Date.now() - startTime,
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Get recent trades for cooldown
-    const { data: recentTrades } = await supabase
-      .from('trade_history')
-      .select('symbol, created_at')
-      .gte('created_at', new Date(Date.now() - CONFIG.cooldownMinutes * 60 * 1000).toISOString())
-      .order('created_at', { ascending: false });
-    
-    const cooldownSymbols = new Set(recentTrades?.map(t => t.symbol) || []);
-
-    // Fetch fresh tickers for opportunity scanning
-    const tickersRes = await fetch('https://api.gateio.ws/api/v4/spot/tickers');
-    const tickers = await tickersRes.json() as Array<{
-      currency_pair: string;
-      last: string;
-      change_percentage: string;
-      quote_volume: string;
-      highest_bid: string;
-      lowest_ask: string;
-    }>;
-    
-    // Filter and score opportunities
-    const opportunities = tickers
-      .filter(t => {
-        const symbol = t.currency_pair;
-        const volume = parseFloat(t.quote_volume);
-        const bid = parseFloat(t.highest_bid);
-        const ask = parseFloat(t.lowest_ask);
-        const spread = ask > 0 ? ((ask - bid) / ask) * 100 : 100;
-        
-        if (!symbol.endsWith('_USDT')) return false;
-        if (CONFIG.excludeSymbols.includes(symbol)) return false;
-        if (cooldownSymbols.has(symbol)) return false;
-        if (volume < CONFIG.minVolume) return false;
-        if (spread > CONFIG.maxSpread) return false;
-        if (bid <= 0 || ask <= 0) return false;
-        if (isLeveragedToken(symbol)) return false;
-        
-        const price = parseFloat(t.last);
+      for (const h of holdings) {
+        const symbol = `${h.currency}_USDT`;
+        const priceData = prices.get(symbol);
         const info = pairInfo.get(symbol);
-        const GATE_MIN_ORDER = 3.5; // Gate.io minimum is $3, use $3.5 for safety
+        if (!priceData || !info) continue;
         
-        if (info) {
-          const minOrderValue = Math.max(info.minAmount * price, GATE_MIN_ORDER);
-          if (minOrderValue > positionSize) return false;
-        } else {
-          // No pair info - ensure we can at least meet $3.5 minimum
-          if (price > positionSize) return false;
+        const valueUsdt = h.available * priceData.price;
+        if (valueUsdt < 0.3 || h.available < info.minAmount) continue;
+        
+        const amount = Math.floor(h.available * Math.pow(10, info.precision)) / Math.pow(10, info.precision);
+        if (amount < info.minAmount) continue;
+        
+        try {
+          const result = await gateRequest('POST', '/spot/orders', apiKey, apiSecret, {
+            currency_pair: symbol, side: 'sell', type: 'market', amount: amount.toFixed(info.precision), time_in_force: 'ioc',
+          }) as { filled_total?: string };
+          const filled = parseFloat(result.filled_total || '0');
+          console.log(`💵 Sold ${h.currency}: +$${filled.toFixed(2)}`);
+          usdtBalance += filled;
+        } catch {
+          console.log(`⚠️ Failed to sell ${h.currency}`);
         }
-        
-        return true;
-      })
-      .map(t => {
-        const change = parseFloat(t.change_percentage);
-        const price = parseFloat(t.last);
-        const volume = parseFloat(t.quote_volume);
-        const bid = parseFloat(t.highest_bid);
-        const ask = parseFloat(t.lowest_ask);
-        const spread = ((ask - bid) / ask) * 100;
-        
-        let edge = 0;
-        let side: 'buy' | 'sell' = 'buy';
-        let strategy = '';
-        
-        if (change >= CONFIG.momentumMinChange && change <= CONFIG.momentumMaxChange) {
-          edge = change * 0.08 - spread - 0.1;
-          side = 'buy';
-          strategy = 'momentum-long';
-        } else if (change <= CONFIG.reversionMinDrop && change >= CONFIG.reversionMaxDrop) {
-          edge = Math.abs(change) * 0.12 - spread - 0.1;
-          side = 'buy';
-          strategy = 'reversion-long';
-        }
-        // DISABLED: fade-pump strategy requires ability to short-sell
-        // which is not available on spot markets without margin
-        // else if (change > CONFIG.momentumMaxChange && change < 30) {
-        //   edge = change * 0.04 - spread - 0.1;
-        //   side = 'sell';
-        //   strategy = 'fade-pump';
-        // }
-        
-        const info = pairInfo.get(t.currency_pair);
-        
-        return {
-          symbol: t.currency_pair,
-          price,
-          change,
-          volume,
-          spread,
-          edge,
-          side,
-          strategy,
-          bid,
-          ask,
-          minAmount: info?.minAmount || 0.0001,
-          amountPrecision: info?.amountPrecision || 4,
-        };
-      })
-      .filter(o => o.edge >= CONFIG.minEdge)
-      .sort((a, b) => b.edge - a.edge);
+      }
+      console.log(`💰 New balance: $${usdtBalance.toFixed(2)}`);
+    }
 
-    console.log(`⚡ [HYPER] Found ${opportunities.length} opportunities`);
+    console.log(`📊 Today: ${todayStats.tradeCount} trades, P&L: ${todayStats.totalPnL.toFixed(2)}%`);
 
-    // Execute best opportunity
-    if (opportunities.length > 0) {
-      const best = opportunities[0];
-      
-      console.log(`🎯 Best: ${best.symbol} | ${best.strategy} | Edge: ${best.edge.toFixed(2)}%`);
-      
-      // Calculate the correct amount based on position size and price
-      const GATE_MIN_ORDER_USDT = 3.5; // Gate.io minimum with buffer
-      
-      // Determine target order value (ensure it's at least the minimum)
-      const targetOrderValue = Math.max(positionSize, GATE_MIN_ORDER_USDT);
-      
-      // Calculate amount needed
-      let amount = targetOrderValue / best.price;
-      
-      // Ensure we meet the pair's minimum amount
-      if (amount < best.minAmount) {
-        amount = best.minAmount * 1.05; // Add 5% buffer
-      }
-      
-      // Round to precision
-      const multiplier = Math.pow(10, best.amountPrecision);
-      amount = Math.floor(amount * multiplier) / multiplier;
-      
-      // If rounding brought us below minimum, round UP instead
-      if (amount < best.minAmount) {
-        amount = Math.ceil(best.minAmount * multiplier) / multiplier;
-      }
-      
-      // Calculate final order value
-      const finalOrderValue = amount * best.price;
-      
-      // Skip if order exceeds balance
-      if (finalOrderValue > finalUsdtBalance) {
-        console.log(`⚠️ Order $${finalOrderValue.toFixed(2)} exceeds balance $${finalUsdtBalance.toFixed(2)}, trying smaller amount...`);
-        
-        // Try with max affordable amount
-        const maxAffordable = Math.floor((finalUsdtBalance * 0.95) / best.price * multiplier) / multiplier;
-        if (maxAffordable >= best.minAmount && maxAffordable * best.price >= GATE_MIN_ORDER_USDT) {
-          amount = maxAffordable;
-          console.log(`📏 Adjusted to affordable amount: ${amount.toFixed(best.amountPrecision)}`);
-        } else {
-          console.log(`⚠️ Cannot afford even minimum order for ${best.symbol}`);
-          // Try next opportunity
+    let cycleNum = 0;
+    const burstEndTime = startTime + CONFIG.burstDurationMs;
+
+    // ===== BURST LOOP - Every 2 seconds =====
+    while (burstMode ? Date.now() < burstEndTime : cycleNum === 0) {
+      cycleNum++;
+      const cycleStart = Date.now();
+
+      try {
+        const [balances, tickers] = await Promise.all([getAllBalances(apiKey, apiSecret), getTickerPrices()]);
+        const currentUsdt = balances.find(b => b.currency === 'USDT')?.available || 0;
+
+        if (currentUsdt < CONFIG.minPositionUsdt) {
+          console.log(`🔥 [${cycleNum}] Low balance: $${currentUsdt.toFixed(2)}`);
+          results.push({ cycle: cycleNum, status: 'low_balance' });
+          
+          // Wait for interval
+          if (burstMode && Date.now() < burstEndTime) {
+            const wait = Math.max(0, cycleNum * CONFIG.burstIntervalMs - (Date.now() - startTime));
+            if (wait > 0) await new Promise(r => setTimeout(r, wait));
+          }
+          continue;
         }
-      }
-      
-      const orderValueFinal = amount * best.price;
-      const amountStr = amount.toFixed(best.amountPrecision);
-      
-      console.log(`📦 Order: ${amountStr} ${best.symbol.split('_')[0]} (~$${orderValueFinal.toFixed(2)})`);
-      
-      let orderId: string | undefined;
-      let executedPrice = best.price;
-      let orderStatus = paperMode ? 'simulated' : 'pending';
-      
-      if (!paperMode) {
-        // Check if order value is valid
-        if (orderValueFinal > finalUsdtBalance) {
-          console.log(`⚠️ Order value $${orderValueFinal.toFixed(2)} exceeds balance $${finalUsdtBalance.toFixed(2)}, skipping`);
-          orderStatus = 'skipped_balance';
-        } else if (orderValueFinal < GATE_MIN_ORDER_USDT) {
-          console.log(`⚠️ Order value $${orderValueFinal.toFixed(2)} below Gate.io minimum $${GATE_MIN_ORDER_USDT}, skipping`);
-          orderStatus = 'skipped_min_order';
-        } else if (amount < best.minAmount) {
-          console.log(`⚠️ Amount ${amount} below pair minimum ${best.minAmount}, skipping`);
-          orderStatus = 'skipped_min_amount';
-        } else {
-          try {
-            const orderBody = {
-              currency_pair: best.symbol,
-              side: best.side,
-              type: 'market',
-              amount: amountStr,
-              time_in_force: 'ioc',
-            };
-            
-            const orderResult = await gateRequest('POST', '/spot/orders', apiKey, apiSecret, orderBody) as {
-              id?: string;
-              avg_deal_price?: string;
-            };
-            
-            orderId = orderResult.id;
-            executedPrice = parseFloat(orderResult.avg_deal_price || best.price.toString());
-            orderStatus = 'executed';
-            
-            console.log(`✅ Order executed: ${orderId} @ ${executedPrice}`);
-          } catch (orderError) {
-            const errorMsg = orderError instanceof Error ? orderError.message : 'Unknown';
-            console.error(`❌ Order failed:`, errorMsg);
-            orderStatus = 'failed';
-            
-            await supabase.from('trade_history').insert({
-              symbol: best.symbol,
-              side: best.side,
-              type: best.strategy,
-              price: best.price,
-              amount: parseFloat(amountStr),
-              expected_edge: best.edge,
-              actual_pnl: 0,
-              status: 'failed',
-              error: errorMsg,
-            });
+
+        const positionSize = Math.min(Math.max(currentUsdt * 0.75, CONFIG.minPositionUsdt), CONFIG.maxPositionUsdt, currentUsdt * 0.9);
+        const { data: recentTrades } = await supabase.from('trade_history').select('symbol').gte('created_at', new Date(Date.now() - CONFIG.cooldownMinutes * 60000).toISOString());
+        const cooldown = new Set((recentTrades as Array<{ symbol: string }> | null)?.map(t => t.symbol) || []);
+
+        // Find opportunities
+        const opportunities: Array<{ symbol: string; price: number; edge: number; strategy: string; minAmount: number; precision: number }> = [];
+        
+        for (const [symbol, data] of tickers) {
+          if (!symbol.endsWith('_USDT') || CONFIG.excludeSymbols.includes(symbol) || cooldown.has(symbol)) continue;
+          if (data.volume < CONFIG.minVolume || data.bid <= 0 || data.ask <= 0) continue;
+          if (isLeveragedToken(symbol)) continue;
+
+          const spread = ((data.ask - data.bid) / data.ask) * 100;
+          if (spread > CONFIG.maxSpread) continue;
+
+          const info = pairInfo.get(symbol);
+          if (!info || info.minAmount * data.price > positionSize) continue;
+
+          let edge = 0, strategy = '';
+          if (data.change >= CONFIG.momentumMinChange && data.change <= CONFIG.momentumMaxChange) {
+            edge = data.change * 0.09 - spread - 0.08;
+            strategy = 'momentum';
+          } else if (data.change <= CONFIG.reversionMinDrop && data.change >= CONFIG.reversionMaxDrop) {
+            edge = Math.abs(data.change) * 0.13 - spread - 0.08;
+            strategy = 'reversion';
+          }
+
+          if (edge >= CONFIG.minEdge && strategy) {
+            opportunities.push({ symbol, price: data.price, edge, strategy, minAmount: info.minAmount, precision: info.precision });
           }
         }
+
+        opportunities.sort((a, b) => b.edge - a.edge);
+
+        if (opportunities.length === 0) {
+          console.log(`🔥 [${cycleNum}] No opportunities (${Date.now() - cycleStart}ms)`);
+          results.push({ cycle: cycleNum, status: 'no_opportunities' });
+        } else {
+          const best = opportunities[0];
+          console.log(`🎯 [${cycleNum}] ${best.symbol} | ${best.strategy} | Edge: ${best.edge.toFixed(2)}%`);
+
+          let amount = Math.max(positionSize / best.price, best.minAmount * 1.05);
+          const mult = Math.pow(10, best.precision);
+          amount = Math.floor(amount * mult) / mult;
+          if (amount < best.minAmount) amount = Math.ceil(best.minAmount * mult) / mult;
+
+          const orderValue = amount * best.price;
+          if (orderValue > currentUsdt || orderValue < 3.5 || amount < best.minAmount) {
+            console.log(`⚠️ [${cycleNum}] Validation failed: $${orderValue.toFixed(2)} vs $${currentUsdt.toFixed(2)}`);
+            results.push({ cycle: cycleNum, symbol: best.symbol, edge: best.edge, status: 'validation_failed' });
+          } else if (!paperMode) {
+            try {
+              const order = await gateRequest('POST', '/spot/orders', apiKey, apiSecret, {
+                currency_pair: best.symbol, side: 'buy', type: 'market', amount: amount.toFixed(best.precision), time_in_force: 'ioc',
+              }) as { id?: string; avg_deal_price?: string };
+
+              const pnl = best.edge * (orderValue / 100);
+              totalTrades++;
+              totalPnL += pnl;
+
+              await supabase.from('trade_history').insert({
+                symbol: best.symbol, side: 'buy', type: 'market', amount, price: parseFloat(order.avg_deal_price || best.price.toString()),
+                expected_edge: best.edge, actual_pnl: pnl, order_id: order.id, status: 'executed', executed_at: new Date().toISOString(),
+              });
+
+              console.log(`✅ [${cycleNum}] Executed ${order.id} +${pnl.toFixed(3)}%`);
+              results.push({ cycle: cycleNum, symbol: best.symbol, edge: best.edge, status: 'executed' });
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : 'Unknown';
+              console.error(`❌ [${cycleNum}] Failed:`, msg);
+              await supabase.from('trade_history').insert({
+                symbol: best.symbol, side: 'buy', type: 'market', amount, price: best.price, expected_edge: best.edge, actual_pnl: 0, status: 'failed', error: msg,
+              });
+              results.push({ cycle: cycleNum, symbol: best.symbol, edge: best.edge, status: 'failed' });
+            }
+          } else {
+            results.push({ cycle: cycleNum, symbol: best.symbol, edge: best.edge, status: 'paper' });
+          }
+        }
+      } catch (e) {
+        console.error(`❌ [${cycleNum}] Cycle error:`, e);
+        results.push({ cycle: cycleNum, status: 'error' });
       }
-      
-      if (orderStatus === 'executed' || orderStatus === 'simulated') {
-        const estimatedPnL = best.edge * 0.6;
-        
-        tradeResult = {
-          symbol: best.symbol,
-          side: best.side,
-          edge: best.edge,
-          pnl: estimatedPnL,
-          strategy: best.strategy,
-          price: executedPrice,
-          orderId,
-          status: orderStatus,
-        };
-        
-        cumulativeTrades++;
-        cumulativePnL += estimatedPnL;
-        
-        await supabase.from('trade_history').insert({
-          symbol: best.symbol,
-          side: best.side,
-          type: best.strategy,
-          price: executedPrice,
-          amount: parseFloat(amountStr),
-          expected_edge: best.edge,
-          actual_pnl: estimatedPnL,
-          order_id: orderId,
-          status: orderStatus,
-        });
-        
-        console.log(`💹 ${best.side.toUpperCase()} ${best.symbol} | Edge: ${best.edge.toFixed(2)}%`);
+
+      // Wait for next interval
+      if (burstMode && Date.now() < burstEndTime) {
+        const wait = Math.max(0, cycleNum * CONFIG.burstIntervalMs - (Date.now() - startTime));
+        if (wait > 0) await new Promise(r => setTimeout(r, wait));
       }
-    } else {
-      console.log(`⏳ No opportunities meet criteria`);
-      cycleStatus = 'no_opportunities';
     }
 
     // Update state
-    const nowIso = new Date().toISOString();
-    if (state?.id) {
-      await supabase
-        .from('trading_system_state')
-        .update({
-          is_active: true,
-          total_cycles: cycleCount,
-          total_trades: cumulativeTrades,
-          total_pnl: cumulativePnL,
-          last_heartbeat: nowIso,
-          updated_at: nowIso,
-        })
-        .eq('id', state.id);
+    const now = new Date().toISOString();
+    if (stateTyped?.id) {
+      await supabase.from('trading_system_state').update({
+        is_active: true,
+        total_cycles: (stateTyped.total_cycles || 0) + cycleNum,
+        total_trades: (stateTyped.total_trades || 0) + totalTrades,
+        total_pnl: (stateTyped.total_pnl || 0) + totalPnL,
+        last_heartbeat: now,
+        updated_at: now,
+      }).eq('id', stateTyped.id);
     }
 
     const duration = Date.now() - startTime;
-    console.log(`⚡ [HYPER] Cycle ${cycleCount} done in ${duration}ms`);
+    console.log(`🏁 [HYPER] ${cycleNum} cycles, ${totalTrades} trades, +${totalPnL.toFixed(2)}% in ${duration}ms`);
 
     return new Response(JSON.stringify({
-      success: true,
-      cycle: cycleCount,
-      status: cycleStatus,
-      trade: tradeResult,
-      liquidation: liquidationResult,
-      cumulativeTrades,
-      cumulativePnL,
-      duration,
-      balance: finalUsdtBalance,
-      positionSize,
-      marketsScanned: tickers.length,
-      opportunitiesFound: opportunities.length,
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+      success: true, burstMode, cycles: cycleNum, trades: totalTrades, pnl: totalPnL, duration, results: results.slice(-15),
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-    console.error('⚡ [HYPER] Critical error:', errorMsg);
-    
-    try {
-      const { data: state } = await supabase
-        .from('trading_system_state')
-        .select('id, total_cycles')
-        .limit(1)
-        .maybeSingle();
-      
-      if (state?.id) {
-        const nowIso = new Date().toISOString();
-        await supabase
-          .from('trading_system_state')
-          .update({
-            total_cycles: (state.total_cycles || 0) + 1,
-            last_heartbeat: nowIso,
-            updated_at: nowIso,
-          })
-          .eq('id', state.id);
-      }
-    } catch (e) {
-      console.error('Failed to update heartbeat:', e);
-    }
-    
-    return new Response(JSON.stringify({
-      success: false,
-      status: 'error',
-      error: errorMsg,
-      liquidation: liquidationResult,
-      duration: Date.now() - startTime,
-    }), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    console.error('❌ Fatal:', error);
+    return new Response(JSON.stringify({ success: false, error: error instanceof Error ? error.message : 'Unknown', duration: Date.now() - startTime }), {
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });
