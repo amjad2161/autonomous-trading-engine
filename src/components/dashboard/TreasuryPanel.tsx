@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Wallet, Lock, TrendingUp, TrendingDown, PiggyBank, AlertCircle, Zap, Loader2 } from "lucide-react";
+import { Wallet, Lock, TrendingUp, TrendingDown, PiggyBank, AlertCircle, Zap, Loader2, Download } from "lucide-react";
 import { useSpotBalances, useTickers, useTotalPortfolioValue, useUSDTBalance, useDailyPnL } from "@/hooks/useGateApi";
 import { formatUSDT, formatCrypto, formatPercentage } from "@/lib/gate-api";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ export function TreasuryPanel() {
   const { data: balances, isLoading: balancesLoading, refetch } = useSpotBalances();
   const { data: tickers } = useTickers();
   const [isLiquidating, setIsLiquidating] = useState(false);
+  const [isCollecting, setIsCollecting] = useState(false);
   
   const usdtBalance = useUSDTBalance(balances);
   const totalValue = useTotalPortfolioValue(balances, tickers);
@@ -29,6 +30,38 @@ export function TreasuryPanel() {
     const value = parseFloat(b.available) * parseFloat(ticker.last);
     return value >= 0.5; // Only show if worth at least $0.50
   });
+
+  // ===== COLLECT ALL - From all platforms to Spot, then to USDT =====
+  const handleCollectAll = async () => {
+    setIsCollecting(true);
+    toast.info("🚀 אוסף מכל הפלטפורמות ומנזל ל-USDT...");
+
+    try {
+      const { data, error } = await supabase.functions.invoke('collect-all');
+      
+      if (error) {
+        toast.error(`שגיאה: ${error.message}`);
+        return;
+      }
+
+      if (data?.success) {
+        const s = data.summary;
+        toast.success(
+          `✅ איסוף הושלם!\n` +
+          `Earn: ${s.earnRedeemed} | Margin: ${s.marginTransferred} | Futures: ${s.futuresTransferred}\n` +
+          `נוזלו ${s.spotLiquidated} מטבעות | +$${s.totalLiquidatedUSDT?.toFixed(2) || '0'}\n` +
+          `יתרה סופית: $${s.finalUSDTBalance?.toFixed(2) || '0'}`
+        );
+        refetch();
+      } else {
+        toast.error(data?.error || 'שגיאה לא ידועה');
+      }
+    } catch (e) {
+      toast.error(`שגיאה: ${e instanceof Error ? e.message : 'Unknown'}`);
+    } finally {
+      setIsCollecting(false);
+    }
+  };
 
   const handleLiquidateAll = async () => {
     if (liquidatableBalances.length === 0) {
@@ -114,20 +147,38 @@ export function TreasuryPanel() {
           <Wallet className="w-4 h-4 text-primary" />
           <h2 className="font-semibold text-sm">Treasury</h2>
         </div>
-        <Button
-          size="sm"
-          variant="destructive"
-          onClick={handleLiquidateAll}
-          disabled={isLiquidating || liquidatableBalances.length === 0}
-          className="h-7 text-xs gap-1"
-        >
-          {isLiquidating ? (
-            <Loader2 className="w-3 h-3 animate-spin" />
-          ) : (
-            <Zap className="w-3 h-3" />
-          )}
-          {isLiquidating ? 'מנזל...' : `נזל הכל (${liquidatableBalances.length})`}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* COLLECT ALL BUTTON */}
+          <Button
+            size="sm"
+            variant="default"
+            onClick={handleCollectAll}
+            disabled={isCollecting}
+            className="h-7 text-xs gap-1 bg-primary hover:bg-primary/90"
+          >
+            {isCollecting ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Download className="w-3 h-3" />
+            )}
+            {isCollecting ? 'אוסף...' : 'אסוף הכל'}
+          </Button>
+          {/* LIQUIDATE BUTTON */}
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={handleLiquidateAll}
+            disabled={isLiquidating || liquidatableBalances.length === 0}
+            className="h-7 text-xs gap-1"
+          >
+            {isLiquidating ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <Zap className="w-3 h-3" />
+            )}
+            {isLiquidating ? 'מנזל...' : `נזל (${liquidatableBalances.length})`}
+          </Button>
+        </div>
       </div>
       
       <div className="p-3 sm:p-4 space-y-3 sm:space-y-4 flex-1 overflow-auto">
