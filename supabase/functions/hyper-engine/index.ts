@@ -1029,95 +1029,78 @@ serve(async (req) => {
           
           let edge = 0, strat = '';
           
-          // ===== ULTRA-AGGRESSIVE OPPORTUNITY DETECTION =====
-          // Every pair is an opportunity! Scan ALL strategies simultaneously
+          // ===== SMART OPPORTUNITY DETECTION =====
+          // Focus on HIGH WIN RATE strategies only!
+          // Based on real performance data:
+          // - hyper-scalp: 60% win rate ✅
+          // - M (Momentum): 0% win rate ❌ DISABLED
+          // - R (Reversion): 0% win rate ❌ DISABLED
           
-          const volMultiplier = 1.0; // No reduction - be aggressive
-          const feeBuffer = 0.08; // 0.08% roundtrip fees
+          const feeBuffer = 0.10; // 0.10% roundtrip fees (conservative)
           
-          // Strategy 1: RAPID - Main strategy for ALL pairs with any spread
-          // Target: 0.01-0.1% profit per trade, high frequency
-          if (spread > 0.05 && spread < 2.0) {
-            const captureRate = 0.5; // Aggressive: expect 50% spread capture
-            const rapidEdge = (spread * captureRate) - feeBuffer;
-            if (rapidEdge > edge) {
-              edge = rapidEdge;
-              strat = 'RAPID';
+          // ===== QUALITY FILTERS =====
+          // Only trade pairs with sufficient liquidity and tight spreads
+          const hasGoodLiquidity = data.volume > 50_000;
+          const hasTightSpread = spread < 0.5;
+          const hasStrongMomentum = Math.abs(data.change) > 1.0;
+          
+          if (!hasGoodLiquidity || !hasTightSpread) {
+            continue; // Skip low quality pairs
+          }
+          
+          // Strategy 1: SCALP - The ONLY winning strategy!
+          // Buy at bid, sell quickly at slightly higher
+          // Requires: tight spread + good volume + momentum confirmation
+          if (spread < 0.3 && data.volume > 100_000) {
+            // Only scalp WITH the trend (not against)
+            const trendConfirmed = data.change > 0.1; // Price going up
+            if (trendConfirmed) {
+              const scalpEdge = (spread * 0.4) - feeBuffer + (data.change * 0.05);
+              if (scalpEdge > edge && scalpEdge > 0.05) {
+                edge = scalpEdge;
+                strat = 'SCALP';
+              }
             }
           }
           
-          // Strategy 2: MICRO - Ultra-small edge, super high frequency
-          // For very liquid pairs with tiny spreads
-          if (spread < 0.15 && data.volume > 100_000) {
-            const microEdge = 0.05 - spread * 0.3; // Tiny but consistent
-            if (microEdge > edge) {
-              edge = microEdge;
-              strat = 'MICRO';
-            }
-          }
-          
-          // Strategy 3: Momentum - riding trends
-          if (data.change >= CONFIG.momentumMinChange && data.change <= CONFIG.momentumMaxChange) {
-            const momEdge = data.change * 0.15 * volMultiplier - spread - feeBuffer;
-            if (momEdge > edge) {
-              edge = momEdge;
-              strat = 'M';
-            }
-          }
-          
-          // Strategy 4: Reversion - bounce from drops
-          if (data.change <= CONFIG.reversionMinDrop && data.change >= CONFIG.reversionMaxDrop) {
-            const revEdge = Math.abs(data.change) * 0.18 * volMultiplier - spread - feeBuffer;
-            if (revEdge > edge) {
-              edge = revEdge;
-              strat = 'R';
-            }
-          }
-          
-          // Strategy 5: Spread capture
-          if (spread < 0.2) {
-            const spreadCapEdge = 0.25 - spread;
-            if (spreadCapEdge > edge) {
-              edge = spreadCapEdge;
-              strat = 'S';
-            }
-          }
-          
-          // Strategy 6: ARB - spread arbitrage on wide spreads
-          if (spread >= 0.3 && data.volume > 50_000) {
-            const arbEdge = spread * 0.6 - feeBuffer;
-            if (arbEdge > edge) {
-              edge = arbEdge;
-              strat = 'ARB';
-            }
-          }
-          
-          // Strategy 7: PUMP - catch rapid price increases
-          if (data.change > 3 && data.volume > 200_000) {
-            const pumpEdge = Math.min(data.change * 0.1, 2.0) - spread;
-            if (pumpEdge > edge) {
+          // Strategy 2: STRONG_PUMP - Very strong upward momentum only
+          // Requires: 5%+ change, high volume, tight spread
+          if (data.change > 5 && data.volume > 500_000 && spread < 0.4) {
+            const pumpEdge = Math.min(data.change * 0.08, 1.5) - spread - feeBuffer;
+            if (pumpEdge > edge && pumpEdge > 0.2) {
               edge = pumpEdge;
               strat = 'PUMP';
             }
           }
           
-          // Strategy 8: DIP - catch rapid price decreases for bounce
-          if (data.change < -3 && data.volume > 200_000) {
-            const dipEdge = Math.min(Math.abs(data.change) * 0.12, 2.5) - spread;
-            if (dipEdge > edge) {
-              edge = dipEdge;
-              strat = 'DIP';
+          // Strategy 3: SPREAD_ARB - Wide spread capture
+          // Only on very liquid pairs where we can actually exit
+          if (spread > 0.5 && spread < 1.5 && data.volume > 200_000) {
+            const arbEdge = (spread * 0.35) - feeBuffer;
+            if (arbEdge > edge && arbEdge > 0.15) {
+              edge = arbEdge;
+              strat = 'ARB';
             }
           }
           
-          // SUPER LOW threshold - accept almost any positive edge!
-          const effectiveMinEdge = Math.max(0.005, dynamicParams.minEdge * 0.5); // 0.005% minimum!
+          // Strategy 4: TREND_FOLLOW - Strong consistent trend
+          // Only when 24h change is significantly positive AND recent momentum
+          if (data.change > 3 && data.change < 15 && data.volume > 300_000 && spread < 0.25) {
+            const trendEdge = (data.change * 0.06) - spread - feeBuffer;
+            if (trendEdge > edge && trendEdge > 0.1) {
+              edge = trendEdge;
+              strat = 'TREND';
+            }
+          }
           
-          if (edge >= effectiveMinEdge) {
-            // Score formula: edge * volume factor / spread impact
-            // Higher volume = better, lower spread = better
-            const volumeFactor = Math.log10(Math.max(data.volume, 10000) / 10000);
-            const score = edge * volumeFactor / (spread + 0.02);
+          // ===== MINIMUM EDGE THRESHOLD =====
+          // Higher threshold = fewer but better trades
+          const MIN_EDGE_THRESHOLD = 0.15; // Require at least 0.15% expected edge
+          
+          if (edge >= MIN_EDGE_THRESHOLD) {
+            // Score: prioritize high edge + high volume + low spread
+            const volumeFactor = Math.log10(Math.max(data.volume, 100000) / 100000);
+            const score = edge * (1 + volumeFactor) / (spread + 0.05);
             
             // Boost RAPID and MICRO for high frequency
             const stratBoost = (strat === 'RAPID' || strat === 'MICRO') ? 1.5 : 
