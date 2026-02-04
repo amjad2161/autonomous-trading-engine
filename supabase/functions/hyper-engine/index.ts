@@ -1021,6 +1021,62 @@ serve(async (req) => {
     const pairs = await getPairs();
     const recentSymbols = new Map<string, number>();
     const failedSymbols = new Set<string>();
+    
+    // ===== STRATEGY WIN RATE TRACKING =====
+    // Block strategies with Win Rate < 50% (minimum 10 trades)
+    const MIN_STRATEGY_WIN_RATE = 50;
+    const MIN_TRADES_FOR_EVAL = 10;
+    
+    // Fetch strategy performance from DB
+    const { data: strategyStats } = await supabase
+      .from('trade_history')
+      .select('type, actual_pnl')
+      .eq('side', 'sell')
+      .not('actual_pnl', 'is', null)
+      .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()); // Last 24h
+    
+    // Calculate Win Rate per strategy
+    const strategyPerformance = new Map<string, { wins: number; total: number; pnl: number }>();
+    const blockedStrategies = new Set<string>();
+    
+    if (strategyStats) {
+      for (const trade of strategyStats) {
+        const strat = trade.type || 'UNKNOWN';
+        const pnl = trade.actual_pnl || 0;
+        
+        if (!strategyPerformance.has(strat)) {
+          strategyPerformance.set(strat, { wins: 0, total: 0, pnl: 0 });
+        }
+        
+        const stats = strategyPerformance.get(strat)!;
+        stats.total++;
+        stats.pnl += pnl;
+        if (pnl > 0) stats.wins++;
+      }
+      
+      // Block strategies with low Win Rate
+      for (const [strat, stats] of strategyPerformance) {
+        if (stats.total >= MIN_TRADES_FOR_EVAL) {
+          const winRate = (stats.wins / stats.total) * 100;
+          if (winRate < MIN_STRATEGY_WIN_RATE) {
+            blockedStrategies.add(strat);
+            console.log(`🚫 BLOCKED: ${strat} (WR=${winRate.toFixed(0)}% < ${MIN_STRATEGY_WIN_RATE}% | ${stats.wins}/${stats.total} wins | PnL=${stats.pnl.toFixed(2)})`);
+            
+            // Log to system
+            await supabase.from('system_log').insert({
+              level: 'warn',
+              component: 'STRATEGY_FILTER',
+              message: `Strategy ${strat} blocked - Win Rate ${winRate.toFixed(0)}% < ${MIN_STRATEGY_WIN_RATE}%`,
+              details: { strategy: strat, winRate, wins: stats.wins, total: stats.total, pnl: stats.pnl },
+            });
+          } else {
+            console.log(`✅ ACTIVE: ${strat} (WR=${winRate.toFixed(0)}% | ${stats.wins}/${stats.total} wins | PnL=${stats.pnl.toFixed(2)})`);
+          }
+        }
+      }
+      
+      console.log(`📊 Strategy filter: ${blockedStrategies.size} blocked, ${strategyPerformance.size - blockedStrategies.size} active`);
+    }
 
     let cycle = 0;
     const endTime = start + CONFIG.burstDurationMs;
@@ -1627,19 +1683,36 @@ serve(async (req) => {
           const MIN_EDGE_THRESHOLD = 0.50;
           
           if (edge >= MIN_EDGE_THRESHOLD) {
+            // ===== BLOCK LOSING STRATEGIES =====
+            // Skip if this strategy has Win Rate < 50%
+            if (blockedStrategies.has(strat)) {
+              continue; // Strategy is blocked due to low Win Rate
+            }
+            
             const volumeFactor = Math.log10(Math.max(data.volume, 100000) / 100000);
             const score = edge * (1 + volumeFactor) / (spread + 0.05);
             
             // Strategy priority boosts - ONLY for profitable strategies!
-            const stratBoost = 
-              (strat === 'FLIP' || strat === 'MICRO') ? 1.6 :           // Ultra-fast = highest priority
-              (strat === 'SCALP' || strat === 'WHALE') ? 1.5 :          // Proven strategies
-              (strat === 'BREAKOUT' || strat === 'BURST') ? 1.4 :       // Momentum plays
-              (strat === 'VOLSURGE' || strat === 'ACCUM') ? 1.3 :       // Volume signals
-              (strat === 'GRID' || strat === 'GRIDDCA' || strat === 'BOUNCE') ? 1.35 : // Grid strategies
-              (strat === 'TREND' || strat === 'CONTINUE') ? 1.2 :       // Trend following
-              (strat === 'REVERSION' || strat === 'OVERSOLD') ? 1.1 :   // Contrarian
+            // Boost is reduced if strategy is borderline (50-60% WR)
+            const stratStats = strategyPerformance.get(strat);
+            const stratWinRate = stratStats && stratStats.total >= 5 
+              ? (stratStats.wins / stratStats.total) * 100 
+              : 60; // Default for new strategies
+            
+            // Performance-adjusted boost: better WR = higher boost
+            const performanceMultiplier = Math.max(0.5, Math.min(1.5, stratWinRate / 60));
+            
+            const baseBoost = 
+              (strat === 'FLIP' || strat === 'MICRO') ? 1.6 :
+              (strat === 'SCALP' || strat === 'WHALE') ? 1.5 :
+              (strat === 'BREAKOUT' || strat === 'BURST') ? 1.4 :
+              (strat === 'VOLSURGE' || strat === 'ACCUM') ? 1.3 :
+              (strat === 'GRID' || strat === 'GRIDDCA' || strat === 'BOUNCE') ? 1.35 :
+              (strat === 'TREND' || strat === 'CONTINUE') ? 1.2 :
+              (strat === 'REVERSION' || strat === 'OVERSOLD') ? 1.1 :
               1.0;
+            
+            const stratBoost = baseBoost * performanceMultiplier;
             
             opps.push({ 
               symbol, 
