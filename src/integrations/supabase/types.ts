@@ -14,6 +14,41 @@ export type Database = {
   }
   public: {
     Tables: {
+      goal_progress: {
+        Row: {
+          created_at: string
+          goal_id: string | null
+          id: string
+          notes: string | null
+          progress_percentage: number | null
+          recorded_value: number
+        }
+        Insert: {
+          created_at?: string
+          goal_id?: string | null
+          id?: string
+          notes?: string | null
+          progress_percentage?: number | null
+          recorded_value: number
+        }
+        Update: {
+          created_at?: string
+          goal_id?: string | null
+          id?: string
+          notes?: string | null
+          progress_percentage?: number | null
+          recorded_value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "goal_progress_goal_id_fkey"
+            columns: ["goal_id"]
+            isOneToOne: false
+            referencedRelation: "trading_goals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       opportunity_log: {
         Row: {
           action_taken: string | null
@@ -149,6 +184,54 @@ export type Database = {
           status?: string
           symbol?: string
           type?: string
+        }
+        Relationships: []
+      }
+      trading_goals: {
+        Row: {
+          achieved_at: string | null
+          auto_adjust_aggression: boolean | null
+          created_at: string
+          current_value: number | null
+          deadline: string | null
+          goal_type: string
+          id: string
+          notes: string | null
+          priority: number | null
+          start_value: number | null
+          status: string | null
+          target_value: number
+          updated_at: string
+        }
+        Insert: {
+          achieved_at?: string | null
+          auto_adjust_aggression?: boolean | null
+          created_at?: string
+          current_value?: number | null
+          deadline?: string | null
+          goal_type: string
+          id?: string
+          notes?: string | null
+          priority?: number | null
+          start_value?: number | null
+          status?: string | null
+          target_value: number
+          updated_at?: string
+        }
+        Update: {
+          achieved_at?: string | null
+          auto_adjust_aggression?: boolean | null
+          created_at?: string
+          current_value?: number | null
+          deadline?: string | null
+          goal_type?: string
+          id?: string
+          notes?: string | null
+          priority?: number | null
+          start_value?: number | null
+          status?: string | null
+          target_value?: number
+          updated_at?: string
         }
         Relationships: []
       }

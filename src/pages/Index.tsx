@@ -19,7 +19,8 @@ import {
   HyperEnginePanel,
   SettingsPanel,
   TradingStatsPanel,
-  RapidTraderPanel
+  RapidTraderPanel,
+  GoalsPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -88,6 +89,11 @@ const Index = () => {
               <HyperEnginePanel />
             </div>
             
+            {/* Goals Panel - NEW! */}
+            <div className="lg:col-span-4">
+              <GoalsPanel />
+            </div>
+            
             {/* Trading Stats Panel */}
             <div className="lg:col-span-4">
               <TradingStatsPanel />
@@ -99,12 +105,12 @@ const Index = () => {
             </div>
             
             {/* Positions */}
-            <div className="lg:col-span-6 h-[350px]">
+            <div className="lg:col-span-4 h-[350px]">
               <PositionsPanel />
             </div>
             
             {/* Activity Log */}
-            <div className="lg:col-span-6 h-[350px]">
+            <div className="lg:col-span-4 h-[350px]">
               <ActivityLog />
             </div>
           </div>

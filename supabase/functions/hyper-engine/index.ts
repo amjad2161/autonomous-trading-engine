@@ -226,6 +226,179 @@ async function getPerformanceState(supabase: any): Promise<PerformanceState> {
   }
 }
 
+// ===== GOAL-BASED AGGRESSION SYSTEM =====
+interface Goal {
+  id: string;
+  goal_type: string;
+  target_value: number;
+  current_value: number;
+  start_value: number;
+  status: string;
+  auto_adjust_aggression: boolean;
+}
+
+interface GoalState {
+  hasActiveGoals: boolean;
+  overallProgress: number; // 0-100
+  urgencyMultiplier: number; // 0.5 to 2.0
+  goals: Goal[];
+}
+
+// deno-lint-ignore no-explicit-any
+async function getGoalState(supabase: any): Promise<GoalState> {
+  try {
+    const { data: goals } = await supabase
+      .from('trading_goals')
+      .select('*')
+      .eq('status', 'active');
+    
+    if (!goals || goals.length === 0) {
+      return {
+        hasActiveGoals: false,
+        overallProgress: 0,
+        urgencyMultiplier: 1.0,
+        goals: [],
+      };
+    }
+    
+    const goalsTyped = goals as Goal[];
+    
+    // Calculate progress for each goal
+    let totalProgress = 0;
+    let urgencySum = 0;
+    
+    for (const goal of goalsTyped) {
+      let progress = 0;
+      
+      if (goal.goal_type === 'balance_target') {
+        const needed = goal.target_value - goal.start_value;
+        if (needed > 0) {
+          progress = Math.min(100, Math.max(0, ((goal.current_value - goal.start_value) / needed) * 100));
+        }
+      } else {
+        progress = goal.target_value > 0 
+          ? Math.min(100, Math.max(0, (goal.current_value / goal.target_value) * 100))
+          : 0;
+      }
+      
+      totalProgress += progress;
+      
+      // Calculate urgency based on progress
+      // Low progress + auto_adjust = more aggressive
+      if (goal.auto_adjust_aggression) {
+        if (progress < 25) urgencySum += 1.5;      // Way behind - be aggressive
+        else if (progress < 50) urgencySum += 1.2; // Behind schedule
+        else if (progress < 75) urgencySum += 1.0; // On track
+        else if (progress < 90) urgencySum += 0.8; // Almost there - be careful
+        else urgencySum += 0.6;                    // Nearly achieved - protect gains
+      } else {
+        urgencySum += 1.0;
+      }
+    }
+    
+    const overallProgress = goalsTyped.length > 0 ? totalProgress / goalsTyped.length : 0;
+    const urgencyMultiplier = goalsTyped.length > 0 ? urgencySum / goalsTyped.length : 1.0;
+    
+    console.log(`🎯 GOALS: ${goalsTyped.length} active | Progress: ${overallProgress.toFixed(0)}% | Urgency: ${urgencyMultiplier.toFixed(2)}x`);
+    
+    return {
+      hasActiveGoals: true,
+      overallProgress,
+      urgencyMultiplier,
+      goals: goalsTyped,
+    };
+  } catch (e) {
+    console.log(`⚠️ Error fetching goals: ${e}`);
+    return {
+      hasActiveGoals: false,
+      overallProgress: 0,
+      urgencyMultiplier: 1.0,
+      goals: [],
+    };
+  }
+}
+
+// Update goal progress after each trade
+// deno-lint-ignore no-explicit-any
+async function updateGoalProgress(supabase: any, tradePnl: number, isWin: boolean) {
+  try {
+    const { data: goals } = await supabase
+      .from('trading_goals')
+      .select('*')
+      .eq('status', 'active');
+    
+    if (!goals || goals.length === 0) return;
+    
+    // Get current balance
+    const { data: stateData } = await supabase
+      .from('trading_system_state')
+      .select('current_balance, total_pnl')
+      .eq('id', 'master-brain')
+      .maybeSingle();
+    
+    const currentBalance = stateData?.current_balance || 0;
+    const todayPnl = stateData?.total_pnl || 0;
+    
+    for (const goal of goals as Goal[]) {
+      let newValue = goal.current_value;
+      let achieved = false;
+      
+      switch (goal.goal_type) {
+        case 'daily_profit':
+          newValue = todayPnl;
+          achieved = newValue >= goal.target_value;
+          break;
+        case 'balance_target':
+          newValue = currentBalance;
+          achieved = newValue >= goal.target_value;
+          break;
+        case 'growth_percentage':
+          if (goal.start_value > 0) {
+            newValue = ((currentBalance - goal.start_value) / goal.start_value) * 100;
+          }
+          achieved = newValue >= goal.target_value;
+          break;
+        case 'winning_trades':
+          if (isWin) newValue = goal.current_value + 1;
+          achieved = newValue >= goal.target_value;
+          break;
+      }
+      
+      // Update goal
+      await supabase
+        .from('trading_goals')
+        .update({
+          current_value: newValue,
+          status: achieved ? 'achieved' : 'active',
+          achieved_at: achieved ? new Date().toISOString() : null,
+        })
+        .eq('id', goal.id);
+      
+      if (achieved) {
+        console.log(`🏆 GOAL ACHIEVED: ${goal.goal_type} = ${goal.target_value}!`);
+        
+        // Log achievement
+        await supabase.from('system_log').insert({
+          level: 'info',
+          component: 'GOAL_SYSTEM',
+          message: `🏆 Goal achieved: ${goal.goal_type}`,
+          details: { goalId: goal.id, target: goal.target_value, achieved: newValue },
+        });
+        
+        // Record progress
+        await supabase.from('goal_progress').insert({
+          goal_id: goal.id,
+          recorded_value: newValue,
+          progress_percentage: 100,
+          notes: 'Goal achieved!',
+        });
+      }
+    }
+  } catch (e) {
+    console.log(`⚠️ Error updating goals: ${e}`);
+  }
+}
+
 function calculateDynamicParams(market: MarketState, performance: PerformanceState): DynamicParams {
   // ===== ADAPTIVE EDGE THRESHOLD =====
   // High volatility + good win rate = lower edge (more opportunities)
@@ -833,14 +1006,30 @@ serve(async (req) => {
         const tickers = await getTickers();
         let usdt = balances.get('USDT') || 0;
         
-        // Dynamic params with marathon override
+        // Dynamic params with marathon and GOAL override
         const marketState = analyzeMarket(tickers);
         const performanceState = await getPerformanceState(supabase);
         const dynamicParams = calculateDynamicParams(marketState, performanceState);
         
+        // ===== GOAL-BASED AGGRESSION =====
+        const goalState = await getGoalState(supabase);
+        
         // Override with marathon config
         dynamicParams.minEdge = Math.max(dynamicParams.minEdge * 0.5, marathonConfig.baseMinEdge);
         dynamicParams.positionPct = marathonConfig.basePositionPct;
+        
+        // Apply goal urgency multiplier
+        if (goalState.hasActiveGoals) {
+          // Higher urgency = lower edge threshold (more trades)
+          dynamicParams.minEdge = Math.max(0.01, dynamicParams.minEdge / goalState.urgencyMultiplier);
+          // Higher urgency = larger positions
+          dynamicParams.positionPct = Math.min(70, dynamicParams.positionPct * goalState.urgencyMultiplier);
+          dynamicParams.maxPositionUsdt = Math.min(100, dynamicParams.maxPositionUsdt * goalState.urgencyMultiplier);
+          
+          if (cycle % 20 === 1) {
+            console.log(`🎯 GOAL MODE: Progress=${goalState.overallProgress.toFixed(0)}% | Urgency=${goalState.urgencyMultiplier.toFixed(2)}x | Edge=${dynamicParams.minEdge.toFixed(3)}%`);
+          }
+        }
         
         if (cycle % 20 === 1) {
           console.log(`🏃 MARATHON ${successfulTrades}/${MARATHON_GOAL} | Phase ${marathonConfig.phase} | Speed=${cycleInterval}ms | Edge=${dynamicParams.minEdge.toFixed(3)}%`);
@@ -1381,6 +1570,9 @@ serve(async (req) => {
           const emoji = netPnl >= 0 ? '💰' : '❌';
           console.log(`${emoji} [${cycle}] ${best.strat} ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%) in ${Date.now() - cycleStart}ms`);
           results.push({ t: cycle, s: best.symbol, a: best.strat, e: best.edge, p: netPnlPct });
+          
+          // ===== UPDATE GOALS =====
+          await updateGoalProgress(supabase, netPnl, netPnl >= 0);
           
           recentSymbols.set(best.symbol, Date.now());
 
