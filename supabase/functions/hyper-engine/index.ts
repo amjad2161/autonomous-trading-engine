@@ -60,25 +60,25 @@ const CONFIG = {
   scanAllPairs: true,        // true = scan all, false = only priority
   priorityBoost: 1.5,        // 1.5x weight for priority pairs
   
-  // Cooldown to avoid repeat losses
-  cooldownSeconds: 60,     // Longer cooldown (was 30)
+  // NO COOLDOWNS - NEVER STOP TRADING
+  cooldownSeconds: 0,        // No cooldown - trade immediately
   
-  // ===== EXCHANGE-SIDE PROTECTION =====
-  stopLossPct: 1.0,        // TIGHTER -1% Stop-Loss (was 1.5%)
-  takeProfitPct: 2.0,      // FASTER +2% Take-Profit (was 3%)
-  trailingStopPct: 0.7,    // Tighter trailing (was 1%)
+  // ===== EXCHANGE-SIDE PROTECTION - INSTANT EXIT ON LOSS =====
+  stopLossPct: 0.5,          // TIGHT -0.5% Stop-Loss - exit losing trades FAST
+  takeProfitPct: 1.0,        // Quick +1% Take-Profit
+  trailingStopPct: 0.3,      // Very tight trailing
   useExchangeOrders: true,
   
-  // ===== LOSS STREAK PROTECTION =====
-  maxConsecutiveLosses: 2,     // Stop after 2 consecutive losses (was 3)
-  lossStreakCooldownMs: 600000, // 10 minute cooldown (was 5)
-  minWinRateToTrade: 40,       // Require 40% win rate (was 30%)
-  recentTradesToCheck: 10,
+  // ===== NO TRADING HALTS - ALWAYS TRADING =====
+  maxConsecutiveLosses: 999,     // NEVER stop for losses
+  lossStreakCooldownMs: 0,       // NO cooldown
+  minWinRateToTrade: 0,          // Trade regardless of win rate
+  recentTradesToCheck: 0,        // Don't check history
   
-  // ===== NEW: QUALITY FILTERS =====
-  minOrderBookDepth: 5000,     // Minimum order book depth in USDT
-  maxPriceVolatility: 5,       // Max 5% volatility in last hour
-  requirePositiveTrend: true,  // Only trade with trend
+  // ===== QUALITY FILTERS =====
+  minOrderBookDepth: 3000,
+  maxPriceVolatility: 10,        // Allow more volatility
+  requirePositiveTrend: false,   // Trade in any direction
 };
 
 // ===== GATE.IO API =====
