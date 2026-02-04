@@ -26,7 +26,7 @@ function getMarathonConfig(successfulTrades: number) {
   const cycleIntervalMs = Math.round(300 + (progress * 1700));
   
   // Min edge: starts at 0.01%, ends at 0.3%
-  const baseMinEdge = 0.01 + (progress * 0.29);
+  const baseMinEdge = 0.20 + (progress * 0.30); // Start at 0.2%, end at 0.5%
   
   // Wait time between buy/sell: starts at 50ms, ends at 500ms
   const tradeWaitMs = Math.round(50 + (progress * 450));
@@ -48,7 +48,7 @@ function getMarathonConfig(successfulTrades: number) {
 
 const BASE_CONFIG = {
   // These get overridden by marathon config
-  baseMinEdge: 0.01,
+  baseMinEdge: 0.20,          // Minimum 0.2% edge - quality over quantity!
   baseMinVolume: 5_000,       // Ultra-low volume - more pairs!
   baseMaxSpread: 2.0,         // Accept any spread
   
