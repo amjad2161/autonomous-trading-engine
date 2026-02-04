@@ -56,3 +56,9 @@ verify_jwt = false
 
 [functions.update-secrets]
 verify_jwt = false
+
+[functions.collect-all]
+verify_jwt = false
+
+[functions.dust-converter]
+verify_jwt = false
