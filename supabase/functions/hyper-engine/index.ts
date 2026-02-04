@@ -10,33 +10,37 @@ const corsHeaders = {
 // ===== STRATEGY PARAMETERS =====
 const CONFIG = {
   // Entry conditions
-  minEdge: 0.5,              // Minimum edge after fees (%)
-  minVolume: 1_000_000,      // Minimum 24h volume (USDT)
-  maxSpread: 0.3,            // Maximum bid-ask spread (%)
+  minEdge: 0.5,
+  minVolume: 1_000_000,
+  maxSpread: 0.3,
   
   // Momentum strategy
-  momentumMinChange: 1.5,    // Minimum % change for momentum entry
-  momentumMaxChange: 12,     // Maximum % change (avoid FOMO tops)
+  momentumMinChange: 1.5,
+  momentumMaxChange: 12,
   
   // Mean reversion strategy
-  reversionMinDrop: -4,      // Minimum drop for mean reversion
-  reversionMaxDrop: -15,     // Maximum drop (avoid falling knives)
+  reversionMinDrop: -4,
+  reversionMaxDrop: -15,
   
   // Position sizing
-  basePositionUsdt: 10,      // Base position size in USDT
-  minPositionUsdt: 5,        // Minimum position size
-  maxPositionUsdt: 50,       // Maximum position size
+  basePositionUsdt: 10,
+  minPositionUsdt: 5,
+  maxPositionUsdt: 50,
   
   // Risk management
-  takeProfitPct: 1.5,        // Take profit (%)
-  stopLossPct: 1.0,          // Stop loss (%)
+  takeProfitPct: 1.5,
+  stopLossPct: 1.0,
   
-  // Filters - EXCLUDE leveraged tokens (3L, 5L, 3S, 5S patterns)
+  // Auto-liquidation settings
+  minDustValueUsdt: 0.5, // Minimum value to consider for liquidation
+  
+  // Filters
   excludeSymbols: ['USDT_USDT', 'USDC_USDT', 'DAI_USDT'],
   excludePatterns: ['3L_USDT', '5L_USDT', '3S_USDT', '5S_USDT', '2L_USDT', '2S_USDT'],
+  stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD', 'USDP', 'GUSD'],
   
-  maxConcurrentTrades: 3,    // Max open positions
-  cooldownMinutes: 5,        // Don't trade same symbol within X minutes
+  maxConcurrentTrades: 3,
+  cooldownMinutes: 5,
 };
 
 // ===== GATE.IO API HELPERS =====
@@ -92,22 +96,52 @@ async function gateRequest(
   return response.json();
 }
 
-// Fetch USDT balance
-async function getUsdtBalance(apiKey: string, apiSecret: string): Promise<number> {
+// Get all spot balances
+async function getAllBalances(apiKey: string, apiSecret: string): Promise<Array<{
+  currency: string;
+  available: number;
+  locked: number;
+}>> {
   try {
     const accounts = await gateRequest('GET', '/spot/accounts', apiKey, apiSecret) as Array<{
       currency: string;
       available: string;
+      locked: string;
     }>;
-    const usdtAccount = accounts.find(a => a.currency === 'USDT');
-    return usdtAccount ? parseFloat(usdtAccount.available) : 0;
+    
+    return accounts
+      .map(a => ({
+        currency: a.currency,
+        available: parseFloat(a.available),
+        locked: parseFloat(a.locked),
+      }))
+      .filter(a => a.available > 0 || a.locked > 0);
   } catch (e) {
-    console.error('Failed to get balance:', e);
-    return 0;
+    console.error('Failed to get balances:', e);
+    return [];
   }
 }
 
-// Fetch currency info for minimum order sizes
+// Get ticker prices for multiple symbols
+async function getTickerPrices(): Promise<Map<string, number>> {
+  try {
+    const tickers = await fetch('https://api.gateio.ws/api/v4/spot/tickers').then(r => r.json()) as Array<{
+      currency_pair: string;
+      last: string;
+    }>;
+    
+    const map = new Map<string, number>();
+    for (const t of tickers) {
+      map.set(t.currency_pair, parseFloat(t.last));
+    }
+    return map;
+  } catch (e) {
+    console.error('Failed to get ticker prices:', e);
+    return new Map();
+  }
+}
+
+// Get currency pair info
 async function getCurrencyPairs(): Promise<Map<string, { minAmount: number; amountPrecision: number }>> {
   try {
     const pairs = await fetch('https://api.gateio.ws/api/v4/spot/currency_pairs').then(r => r.json()) as Array<{
@@ -130,6 +164,97 @@ async function getCurrencyPairs(): Promise<Map<string, { minAmount: number; amou
   }
 }
 
+// Auto-liquidate non-USDT holdings to USDT
+async function autoLiquidate(
+  apiKey: string, 
+  apiSecret: string,
+  balances: Array<{ currency: string; available: number }>,
+  prices: Map<string, number>,
+  pairInfo: Map<string, { minAmount: number; amountPrecision: number }>
+): Promise<{ liquidated: number; details: Array<{ currency: string; amount: number; valueUsdt: number; status: string }> }> {
+  const details: Array<{ currency: string; amount: number; valueUsdt: number; status: string }> = [];
+  let totalLiquidated = 0;
+  
+  for (const balance of balances) {
+    // Skip USDT and stablecoins
+    if (CONFIG.stablecoins.includes(balance.currency)) {
+      continue;
+    }
+    
+    // Check if there's a _USDT pair for this currency
+    const symbol = `${balance.currency}_USDT`;
+    const price = prices.get(symbol);
+    
+    if (!price) {
+      console.log(`⏭️ No USDT pair for ${balance.currency}, skipping`);
+      continue;
+    }
+    
+    const valueUsdt = balance.available * price;
+    
+    // Skip if value is too small
+    if (valueUsdt < CONFIG.minDustValueUsdt) {
+      console.log(`⏭️ ${balance.currency} value too small ($${valueUsdt.toFixed(4)}), skipping`);
+      continue;
+    }
+    
+    // Get pair info for precision
+    const info = pairInfo.get(symbol);
+    if (!info) {
+      console.log(`⏭️ No pair info for ${symbol}, skipping`);
+      continue;
+    }
+    
+    // Check if amount meets minimum
+    if (balance.available < info.minAmount) {
+      console.log(`⏭️ ${balance.currency} amount ${balance.available} below minimum ${info.minAmount}, skipping`);
+      details.push({ currency: balance.currency, amount: balance.available, valueUsdt, status: 'below_minimum' });
+      continue;
+    }
+    
+    // Round amount to precision
+    const multiplier = Math.pow(10, info.amountPrecision);
+    const sellAmount = Math.floor(balance.available * multiplier) / multiplier;
+    
+    if (sellAmount < info.minAmount) {
+      console.log(`⏭️ Rounded ${balance.currency} amount ${sellAmount} below minimum, skipping`);
+      details.push({ currency: balance.currency, amount: balance.available, valueUsdt, status: 'rounded_below_min' });
+      continue;
+    }
+    
+    try {
+      console.log(`💱 Liquidating ${sellAmount} ${balance.currency} (~$${valueUsdt.toFixed(2)})`);
+      
+      const orderBody = {
+        currency_pair: symbol,
+        side: 'sell',
+        type: 'market',
+        amount: sellAmount.toFixed(info.amountPrecision),
+        time_in_force: 'ioc',
+      };
+      
+      const result = await gateRequest('POST', '/spot/orders', apiKey, apiSecret, orderBody) as {
+        id?: string;
+        status?: string;
+        filled_total?: string;
+      };
+      
+      const filledUsdt = parseFloat(result.filled_total || '0');
+      totalLiquidated += filledUsdt;
+      
+      console.log(`✅ Sold ${balance.currency}: +$${filledUsdt.toFixed(2)} USDT`);
+      details.push({ currency: balance.currency, amount: sellAmount, valueUsdt: filledUsdt, status: 'sold' });
+      
+    } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : 'Unknown error';
+      console.error(`❌ Failed to sell ${balance.currency}:`, errorMsg);
+      details.push({ currency: balance.currency, amount: balance.available, valueUsdt, status: 'failed' });
+    }
+  }
+  
+  return { liquidated: totalLiquidated, details };
+}
+
 // Check if symbol is a leveraged token
 function isLeveragedToken(symbol: string): boolean {
   for (const pattern of CONFIG.excludePatterns) {
@@ -137,7 +262,6 @@ function isLeveragedToken(symbol: string): boolean {
       return true;
     }
   }
-  // Additional check for common leveraged token patterns
   const leveragedRegex = /\d+(L|S)_USDT$/;
   return leveragedRegex.test(symbol);
 }
@@ -155,7 +279,6 @@ serve(async (req) => {
 
   const startTime = Date.now();
   let cycleStatus = 'completed';
-  let cycleError: string | null = null;
   let tradeResult: {
     symbol: string;
     side: string;
@@ -166,13 +289,13 @@ serve(async (req) => {
     orderId?: string;
     status: string;
   } | null = null;
+  let liquidationResult: { liquidated: number; details: unknown[] } | null = null;
 
   try {
     const { paperMode = true } = await req.json().catch(() => ({}));
     
     console.log(`⚡ [HYPER] Cycle start (paper: ${paperMode})`);
 
-    // Get API keys from secrets
     const apiKey = Deno.env.get('GATE_API_KEY');
     const apiSecret = Deno.env.get('GATE_API_SECRET');
     
@@ -191,16 +314,49 @@ serve(async (req) => {
     let cumulativePnL = state?.total_pnl || 0;
     let cumulativeTrades = state?.total_trades || 0;
 
-    // Check USDT balance first
-    const usdtBalance = await getUsdtBalance(apiKey, apiSecret);
-    console.log(`💰 Available USDT: ${usdtBalance.toFixed(2)}`);
+    // Get all data in parallel
+    const [balances, prices, pairInfo] = await Promise.all([
+      getAllBalances(apiKey, apiSecret),
+      getTickerPrices(),
+      getCurrencyPairs(),
+    ]);
     
-    // If balance is too low, skip trading but still update heartbeat
-    if (usdtBalance < CONFIG.minPositionUsdt) {
-      console.log(`⚠️ Insufficient balance (${usdtBalance.toFixed(2)} < ${CONFIG.minPositionUsdt}). Skipping cycle.`);
+    // Find USDT balance
+    const usdtBalance = balances.find(b => b.currency === 'USDT')?.available || 0;
+    console.log(`💰 Initial USDT: $${usdtBalance.toFixed(2)}`);
+    
+    // List other holdings
+    const otherHoldings = balances.filter(b => !CONFIG.stablecoins.includes(b.currency));
+    if (otherHoldings.length > 0) {
+      console.log(`📦 Other holdings: ${otherHoldings.map(h => `${h.currency}:${h.available.toFixed(4)}`).join(', ')}`);
+    }
+
+    // AUTO-LIQUIDATE if USDT is too low but we have other assets
+    let finalUsdtBalance = usdtBalance;
+    
+    if (usdtBalance < CONFIG.minPositionUsdt && otherHoldings.length > 0 && !paperMode) {
+      console.log(`🔄 USDT below minimum, attempting auto-liquidation...`);
+      
+      liquidationResult = await autoLiquidate(apiKey, apiSecret, otherHoldings, prices, pairInfo);
+      
+      if (liquidationResult.liquidated > 0) {
+        console.log(`💵 Total liquidated: +$${liquidationResult.liquidated.toFixed(2)} USDT`);
+        
+        // Re-fetch USDT balance after liquidation
+        const newBalances = await getAllBalances(apiKey, apiSecret);
+        finalUsdtBalance = newBalances.find(b => b.currency === 'USDT')?.available || 0;
+        console.log(`💰 New USDT balance: $${finalUsdtBalance.toFixed(2)}`);
+      } else {
+        console.log(`⚠️ No assets could be liquidated`);
+      }
+    }
+
+    // Check if we have enough to trade
+    if (finalUsdtBalance < CONFIG.minPositionUsdt) {
+      console.log(`⚠️ Insufficient balance after liquidation ($${finalUsdtBalance.toFixed(2)} < $${CONFIG.minPositionUsdt})`);
       cycleStatus = 'skipped_low_balance';
       
-      // Still update heartbeat
+      // Update heartbeat
       const nowIso = new Date().toISOString();
       if (state?.id) {
         await supabase
@@ -217,27 +373,25 @@ serve(async (req) => {
       return new Response(JSON.stringify({
         success: true,
         cycle: cycleCount,
-        status: 'skipped_low_balance',
-        balance: usdtBalance,
-        message: 'Insufficient USDT balance',
+        status: cycleStatus,
+        balance: finalUsdtBalance,
+        liquidation: liquidationResult,
+        message: 'No USDT and no liquidatable assets',
         duration: Date.now() - startTime,
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Calculate dynamic position size based on balance
+    // Calculate position size
     const positionSize = Math.min(
-      Math.max(usdtBalance * 0.1, CONFIG.minPositionUsdt), // 10% of balance, min $5
-      CONFIG.maxPositionUsdt, // max $50
-      usdtBalance * 0.5 // never more than 50% of balance
+      Math.max(finalUsdtBalance * 0.1, CONFIG.minPositionUsdt),
+      CONFIG.maxPositionUsdt,
+      finalUsdtBalance * 0.5
     );
-    console.log(`📊 Position size: ${positionSize.toFixed(2)} USDT`);
+    console.log(`📊 Position size: $${positionSize.toFixed(2)}`);
 
-    // Get currency pair info for minimum amounts
-    const pairInfo = await getCurrencyPairs();
-
-    // Get recent trades to avoid cooldown symbols
+    // Get recent trades for cooldown
     const { data: recentTrades } = await supabase
       .from('trade_history')
       .select('symbol, created_at')
@@ -246,7 +400,7 @@ serve(async (req) => {
     
     const cooldownSymbols = new Set(recentTrades?.map(t => t.symbol) || []);
 
-    // Fetch market data
+    // Fetch fresh tickers for opportunity scanning
     const tickersRes = await fetch('https://api.gateio.ws/api/v4/spot/tickers');
     const tickers = await tickersRes.json() as Array<{
       currency_pair: string;
@@ -266,26 +420,18 @@ serve(async (req) => {
         const ask = parseFloat(t.lowest_ask);
         const spread = ask > 0 ? ((ask - bid) / ask) * 100 : 100;
         
-        // Basic filters
         if (!symbol.endsWith('_USDT')) return false;
         if (CONFIG.excludeSymbols.includes(symbol)) return false;
         if (cooldownSymbols.has(symbol)) return false;
         if (volume < CONFIG.minVolume) return false;
         if (spread > CONFIG.maxSpread) return false;
         if (bid <= 0 || ask <= 0) return false;
+        if (isLeveragedToken(symbol)) return false;
         
-        // CRITICAL: Exclude leveraged tokens
-        if (isLeveragedToken(symbol)) {
-          return false;
-        }
-        
-        // Check minimum order amount
         const info = pairInfo.get(symbol);
         if (info) {
           const minOrderValue = info.minAmount * parseFloat(t.last);
-          if (minOrderValue > positionSize) {
-            return false; // Skip if min order is larger than our position
-          }
+          if (minOrderValue > positionSize) return false;
         }
         
         return true;
@@ -302,26 +448,20 @@ serve(async (req) => {
         let side: 'buy' | 'sell' = 'buy';
         let strategy = '';
         
-        // Momentum long: riding uptrend
         if (change >= CONFIG.momentumMinChange && change <= CONFIG.momentumMaxChange) {
-          edge = change * 0.08 - spread - 0.1; // Factor in spread + fees
+          edge = change * 0.08 - spread - 0.1;
           side = 'buy';
           strategy = 'momentum-long';
-        }
-        // Mean reversion long: catching oversold bounce
-        else if (change <= CONFIG.reversionMinDrop && change >= CONFIG.reversionMaxDrop) {
+        } else if (change <= CONFIG.reversionMinDrop && change >= CONFIG.reversionMaxDrop) {
           edge = Math.abs(change) * 0.12 - spread - 0.1;
           side = 'buy';
           strategy = 'reversion-long';
-        }
-        // Momentum short: fading extreme pumps (only if truly extreme)
-        else if (change > CONFIG.momentumMaxChange && change < 30) {
+        } else if (change > CONFIG.momentumMaxChange && change < 30) {
           edge = change * 0.04 - spread - 0.1;
           side = 'sell';
           strategy = 'fade-pump';
         }
         
-        // Get pair info for amount calculation
         const info = pairInfo.get(t.currency_pair);
         
         return {
@@ -342,24 +482,19 @@ serve(async (req) => {
       .filter(o => o.edge >= CONFIG.minEdge)
       .sort((a, b) => b.edge - a.edge);
 
-    console.log(`⚡ [HYPER] Found ${opportunities.length} opportunities (filtered leveraged tokens)`);
+    console.log(`⚡ [HYPER] Found ${opportunities.length} opportunities`);
 
     // Execute best opportunity
     if (opportunities.length > 0) {
       const best = opportunities[0];
       
-      console.log(`🎯 Best: ${best.symbol} | ${best.strategy} | Edge: ${best.edge.toFixed(2)}% | Change: ${best.change.toFixed(2)}%`);
+      console.log(`🎯 Best: ${best.symbol} | ${best.strategy} | Edge: ${best.edge.toFixed(2)}%`);
       
-      // Calculate position size with precision
       let amount = positionSize / best.price;
-      
-      // Ensure amount meets minimum and precision requirements
       if (amount < best.minAmount) {
-        console.log(`⚠️ Amount ${amount} below minimum ${best.minAmount}, adjusting...`);
-        amount = best.minAmount * 1.1; // Add 10% buffer
+        amount = best.minAmount * 1.1;
       }
       
-      // Round to precision
       const multiplier = Math.pow(10, best.amountPrecision);
       amount = Math.floor(amount * multiplier) / multiplier;
       
@@ -373,60 +508,51 @@ serve(async (req) => {
       let orderStatus = paperMode ? 'simulated' : 'pending';
       
       if (!paperMode) {
-        try {
-          // Double-check we have enough balance for this order
-          if (orderValue > usdtBalance) {
-            console.log(`⚠️ Order value ${orderValue.toFixed(2)} exceeds balance ${usdtBalance.toFixed(2)}, skipping`);
-            orderStatus = 'skipped_balance';
-          } else {
-            // Execute real trade via Gate.io
+        if (orderValue > finalUsdtBalance) {
+          console.log(`⚠️ Order value exceeds balance, skipping`);
+          orderStatus = 'skipped_balance';
+        } else {
+          try {
             const orderBody = {
               currency_pair: best.symbol,
               side: best.side,
               type: 'market',
               amount: amountStr,
-              time_in_force: 'ioc', // Immediate or cancel
+              time_in_force: 'ioc',
             };
             
-            const orderResult = await gateRequest(
-              'POST',
-              '/spot/orders',
-              apiKey,
-              apiSecret,
-              orderBody
-            ) as { id?: string; avg_deal_price?: string; status?: string };
+            const orderResult = await gateRequest('POST', '/spot/orders', apiKey, apiSecret, orderBody) as {
+              id?: string;
+              avg_deal_price?: string;
+            };
             
             orderId = orderResult.id;
             executedPrice = parseFloat(orderResult.avg_deal_price || best.price.toString());
             orderStatus = 'executed';
             
             console.log(`✅ Order executed: ${orderId} @ ${executedPrice}`);
+          } catch (orderError) {
+            const errorMsg = orderError instanceof Error ? orderError.message : 'Unknown';
+            console.error(`❌ Order failed:`, errorMsg);
+            orderStatus = 'failed';
+            
+            await supabase.from('trade_history').insert({
+              symbol: best.symbol,
+              side: best.side,
+              type: best.strategy,
+              price: best.price,
+              amount: parseFloat(amountStr),
+              expected_edge: best.edge,
+              actual_pnl: 0,
+              status: 'failed',
+              error: errorMsg,
+            });
           }
-        } catch (orderError) {
-          const errorMsg = orderError instanceof Error ? orderError.message : 'Unknown error';
-          console.error(`❌ Order failed (non-fatal):`, errorMsg);
-          orderStatus = 'failed';
-          cycleError = errorMsg;
-          
-          // Log failed trade but DON'T throw - continue the cycle
-          await supabase.from('trade_history').insert({
-            symbol: best.symbol,
-            side: best.side,
-            type: best.strategy,
-            price: best.price,
-            amount: parseFloat(amountStr),
-            expected_edge: best.edge,
-            actual_pnl: 0,
-            status: 'failed',
-            error: errorMsg,
-          });
         }
       }
       
-      // Only record successful/simulated trades
       if (orderStatus === 'executed' || orderStatus === 'simulated') {
-        // Estimate PnL based on edge (real PnL comes from position exit)
-        const estimatedPnL = best.edge * 0.6; // Conservative estimate
+        const estimatedPnL = best.edge * 0.6;
         
         tradeResult = {
           symbol: best.symbol,
@@ -442,7 +568,6 @@ serve(async (req) => {
         cumulativeTrades++;
         cumulativePnL += estimatedPnL;
         
-        // Log trade
         await supabase.from('trade_history').insert({
           symbol: best.symbol,
           side: best.side,
@@ -455,16 +580,15 @@ serve(async (req) => {
           status: orderStatus,
         });
         
-        console.log(`💹 ${best.side.toUpperCase()} ${best.symbol} | Strategy: ${best.strategy} | Edge: ${best.edge.toFixed(2)}%`);
+        console.log(`💹 ${best.side.toUpperCase()} ${best.symbol} | Edge: ${best.edge.toFixed(2)}%`);
       }
     } else {
       console.log(`⏳ No opportunities meet criteria`);
       cycleStatus = 'no_opportunities';
     }
 
-    // ALWAYS update state/heartbeat, even on failures
+    // Update state
     const nowIso = new Date().toISOString();
-    
     if (state?.id) {
       await supabase
         .from('trading_system_state')
@@ -480,21 +604,21 @@ serve(async (req) => {
     }
 
     const duration = Date.now() - startTime;
-    console.log(`⚡ [HYPER] Cycle ${cycleCount} done in ${duration}ms | Status: ${cycleStatus}`);
+    console.log(`⚡ [HYPER] Cycle ${cycleCount} done in ${duration}ms`);
 
     return new Response(JSON.stringify({
       success: true,
       cycle: cycleCount,
       status: cycleStatus,
       trade: tradeResult,
+      liquidation: liquidationResult,
       cumulativeTrades,
       cumulativePnL,
       duration,
-      balance: usdtBalance,
+      balance: finalUsdtBalance,
       positionSize,
       marketsScanned: tickers.length,
       opportunitiesFound: opportunities.length,
-      error: cycleError,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -503,13 +627,7 @@ serve(async (req) => {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     console.error('⚡ [HYPER] Critical error:', errorMsg);
     
-    // Still try to update heartbeat on critical errors
     try {
-      const supabase = createClient(
-        Deno.env.get('SUPABASE_URL')!,
-        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-      );
-      
       const { data: state } = await supabase
         .from('trading_system_state')
         .select('id, total_cycles')
@@ -528,16 +646,17 @@ serve(async (req) => {
           .eq('id', state.id);
       }
     } catch (e) {
-      console.error('Failed to update heartbeat on error:', e);
+      console.error('Failed to update heartbeat:', e);
     }
     
     return new Response(JSON.stringify({
       success: false,
       status: 'error',
       error: errorMsg,
+      liquidation: liquidationResult,
       duration: Date.now() - startTime,
     }), {
-      status: 200, // Return 200 even on error to not break cron
+      status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
