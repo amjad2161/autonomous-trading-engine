@@ -1222,10 +1222,31 @@ serve(async (req) => {
         const opps: Opp[] = [];
         const now = Date.now();
 
+        // ===== GLOBAL STABLECOIN FILTER =====
+        // Stablecoins are NEVER profitable - they don't move!
+        const STABLECOIN_PATTERNS = [
+          'USDC_USDT', 'DAI_USDT', 'BUSD_USDT', 'TUSD_USDT', 'FDUSD_USDT',
+          'GUSD_USDT', 'USDP_USDT', 'USD1_USDT', 'PYUSD_USDT', 'FRAX_USDT',
+          'USDD_USDT', 'CUSD_USDT', 'SUSD_USDT', 'LUSD_USDT', 'EUSD_USDT',
+          'USTC_USDT', 'ALUSD_USDT', 'MIM_USDT', 'DOLA_USDT', 'FEI_USDT',
+          'USDN_USDT', 'RSR_USDT', 'OUSD_USDT', 'USDX_USDT', 'USDK_USDT',
+        ];
+        
         for (const [symbol, data] of tickers) {
           if (!symbol.endsWith('_USDT')) continue;
           if (isExcluded(symbol)) continue;
           if (failedSymbols.has(symbol)) continue;
+          
+          // ===== GLOBAL STABLECOIN EXCLUSION =====
+          // Skip ALL stablecoins - they don't move and just generate fee losses
+          if (STABLECOIN_PATTERNS.includes(symbol)) continue;
+          
+          // Additional stablecoin detection by name patterns
+          const base = symbol.split('_')[0];
+          if (base.includes('USD') || base.includes('DAI') || base.includes('BUSD') || 
+              base.includes('TUSD') || base.includes('FRAX') || base.includes('LUSD') ||
+              base.includes('GUSD') || base.includes('CUSD') || base.includes('SUSD')) continue;
+          
           // Use DYNAMIC volume threshold
           if (data.volume < dynamicParams.minVolume || data.bid <= 0 || data.ask <= 0) continue;
           
