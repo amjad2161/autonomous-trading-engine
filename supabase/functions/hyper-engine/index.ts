@@ -7,27 +7,28 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== PROFITABLE TRADING CONFIG - AGGRESSIVE PROFITABILITY =====
-const CONFIG = {
-  // Lower edge for more trades (aggressive mode)
-  minEdge: 0.1,            // 0.1% minimum edge (more trades, smaller margins)
-  minVolume: 300_000,      // Higher volume = better fills, less slippage
-  maxSpread: 0.15,         // TIGHTER spread - max 0.15% (was 0.3%)
+// ===== DYNAMIC ADAPTIVE CONFIG =====
+// All values are BASE values that get adjusted dynamically
+const BASE_CONFIG = {
+  // Base thresholds (will be adjusted by market conditions)
+  baseMinEdge: 0.15,         // Base edge - adjusted dynamically
+  baseMinVolume: 100_000,    // Base volume requirement
+  baseMaxSpread: 0.3,        // Base max spread
   
-  // Strategy thresholds - MORE SELECTIVE
-  momentumMinChange: 2.0,  // Stronger momentum required (was 1.5%)
-  momentumMaxChange: 25,   // Avoid parabolic moves that reverse fast
-  reversionMinDrop: -3.0,  // Deeper drop for reversion (was -2%)
-  reversionMaxDrop: -30,   // Avoid death spirals
+  // Strategy thresholds
+  momentumMinChange: 1.5,
+  momentumMaxChange: 30,
+  reversionMinDrop: -2.5,
+  reversionMaxDrop: -35,
   
-  // Position sizing - CONSERVATIVE
+  // Position sizing
   minPositionUsdt: 3,
-  maxPositionUsdt: 8,      // Smaller max to reduce risk
-  positionPct: 40,         // 40% of balance (was 50%)
+  maxPositionUsdt: 15,
+  positionPct: 50,
   
   // Continuous operation
   burstDurationMs: 55000,
-  cycleIntervalMs: 3000,   // Slower - every 3 seconds (more analysis time)
+  cycleIntervalMs: 2000,
   
   // Auto-liquidation
   liquidateThreshold: 3,
@@ -38,47 +39,279 @@ const CONFIG = {
   excludePatterns: ['3L', '5L', '3S', '5S', '2L', '2S', 'BULL', 'BEAR'],
   stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD'],
   
-  // ===== PRIORITY PAIRS - High volume, good liquidity =====
+  // Priority pairs
   priorityPairs: [
-    // Top Market Cap - High liquidity
     'BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'ADA_USDT',
     'DOGE_USDT', 'AVAX_USDT', 'DOT_USDT', 'LINK_USDT', 'MATIC_USDT',
-    // Layer 1s - Good volatility
     'NEAR_USDT', 'SUI_USDT', 'APT_USDT', 'SEI_USDT', 'INJ_USDT',
     'TIA_USDT', 'FTM_USDT', 'ATOM_USDT', 'ALGO_USDT', 'HBAR_USDT',
-    // DeFi - Active trading
     'UNI_USDT', 'AAVE_USDT', 'MKR_USDT', 'LDO_USDT', 'CRV_USDT',
-    // AI/Gaming - High volatility opportunities
     'FET_USDT', 'RNDR_USDT', 'AGIX_USDT', 'IMX_USDT', 'GALA_USDT',
-    // Meme coins - Extreme volatility
     'PEPE_USDT', 'SHIB_USDT', 'FLOKI_USDT', 'BONK_USDT', 'WIF_USDT',
-    // New/Trending
     'ARB_USDT', 'OP_USDT', 'STX_USDT', 'ORDI_USDT', 'JUP_USDT',
   ],
+  scanAllPairs: true,
+  priorityBoost: 1.5,
   
-  // Scan all pairs or just priority
-  scanAllPairs: true,        // true = scan all, false = only priority
-  priorityBoost: 1.5,        // 1.5x weight for priority pairs
+  // Never stop trading
+  cooldownSeconds: 0,
+  maxConsecutiveLosses: 999,
+  lossStreakCooldownMs: 0,
+  minWinRateToTrade: 0,
+  recentTradesToCheck: 0,
   
-  // NO COOLDOWNS - NEVER STOP TRADING
-  cooldownSeconds: 0,        // No cooldown - trade immediately
-  
-  // ===== EXCHANGE-SIDE PROTECTION - INSTANT EXIT ON LOSS =====
-  stopLossPct: 0.5,          // TIGHT -0.5% Stop-Loss - exit losing trades FAST
-  takeProfitPct: 1.0,        // Quick +1% Take-Profit
-  trailingStopPct: 0.3,      // Very tight trailing
+  // Protection
+  baseStopLoss: 0.8,
+  baseTakeProfit: 1.5,
+  trailingStopPct: 0.4,
   useExchangeOrders: true,
+};
+
+// ===== DYNAMIC PARAMETER ENGINE =====
+interface DynamicParams {
+  minEdge: number;
+  minVolume: number;
+  maxSpread: number;
+  stopLossPct: number;
+  takeProfitPct: number;
+  positionPct: number;
+  maxPositionUsdt: number;
+  aggressiveness: number; // 0-100 scale
+  regime: string;
+}
+
+interface MarketState {
+  avgVolatility: number;    // Average 24h change across top pairs
+  btcChange: number;        // BTC 24h change
+  marketTrend: 'bull' | 'bear' | 'neutral';
+  avgVolume: number;        // Average volume
+  spreadHealth: number;     // 0-1, how tight spreads are
+}
+
+interface PerformanceState {
+  recentWinRate: number;    // Last 10 trades
+  lastTradeProfit: boolean;
+  consecutiveWins: number;
+  consecutiveLosses: number;
+  avgProfitPct: number;
+  totalPnL: number;
+}
+
+function analyzeMarket(tickers: Map<string, { price: number; change: number; volume: number; bid: number; ask: number }>): MarketState {
+  const topPairs = ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'ADA_USDT'];
+  let totalVolatility = 0;
+  let totalVolume = 0;
+  let totalSpreadHealth = 0;
+  let count = 0;
   
-  // ===== NO TRADING HALTS - ALWAYS TRADING =====
-  maxConsecutiveLosses: 999,     // NEVER stop for losses
-  lossStreakCooldownMs: 0,       // NO cooldown
-  minWinRateToTrade: 0,          // Trade regardless of win rate
-  recentTradesToCheck: 0,        // Don't check history
+  let btcChange = 0;
   
-  // ===== QUALITY FILTERS =====
+  for (const pair of topPairs) {
+    const ticker = tickers.get(pair);
+    if (ticker) {
+      totalVolatility += Math.abs(ticker.change);
+      totalVolume += ticker.volume;
+      const spread = ticker.ask > 0 ? ((ticker.ask - ticker.bid) / ticker.ask) * 100 : 1;
+      totalSpreadHealth += Math.max(0, 1 - spread); // Tighter spread = higher health
+      count++;
+      
+      if (pair === 'BTC_USDT') {
+        btcChange = ticker.change;
+      }
+    }
+  }
+  
+  const avgVolatility = count > 0 ? totalVolatility / count : 2;
+  const avgVolume = count > 0 ? totalVolume / count : 1000000;
+  const spreadHealth = count > 0 ? totalSpreadHealth / count : 0.5;
+  
+  // Determine market trend
+  let bullCount = 0;
+  let bearCount = 0;
+  for (const pair of topPairs) {
+    const ticker = tickers.get(pair);
+    if (ticker) {
+      if (ticker.change > 1) bullCount++;
+      else if (ticker.change < -1) bearCount++;
+    }
+  }
+  
+  const marketTrend: 'bull' | 'bear' | 'neutral' = 
+    bullCount >= 3 ? 'bull' : bearCount >= 3 ? 'bear' : 'neutral';
+  
+  return { avgVolatility, btcChange, marketTrend, avgVolume, spreadHealth };
+}
+
+// deno-lint-ignore no-explicit-any
+async function getPerformanceState(supabase: any): Promise<PerformanceState> {
+  try {
+    const { data: trades } = await supabase
+      .from('trade_history')
+      .select('actual_pnl, status')
+      .not('actual_pnl', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    
+    if (!trades || trades.length === 0) {
+      return {
+        recentWinRate: 50,
+        lastTradeProfit: true,
+        consecutiveWins: 0,
+        consecutiveLosses: 0,
+        avgProfitPct: 0,
+        totalPnL: 0,
+      };
+    }
+    
+    const tradesTyped = trades as Array<{ actual_pnl: number | null; status: string }>;
+    const wins = tradesTyped.filter(t => (t.actual_pnl || 0) > 0);
+    const recentWinRate = (wins.length / tradesTyped.length) * 100;
+    const lastTradeProfit = (tradesTyped[0]?.actual_pnl || 0) > 0;
+    
+    // Count consecutive wins/losses from start
+    let consecutiveWins = 0;
+    let consecutiveLosses = 0;
+    for (const t of tradesTyped) {
+      if ((t.actual_pnl || 0) > 0) {
+        if (consecutiveLosses === 0) consecutiveWins++;
+        else break;
+      } else {
+        if (consecutiveWins === 0) consecutiveLosses++;
+        else break;
+      }
+    }
+    
+    const avgProfitPct = tradesTyped.reduce((sum, t) => sum + (t.actual_pnl || 0), 0) / tradesTyped.length;
+    const totalPnL = tradesTyped.reduce((sum, t) => sum + (t.actual_pnl || 0), 0);
+    
+    return { recentWinRate, lastTradeProfit, consecutiveWins, consecutiveLosses, avgProfitPct, totalPnL };
+  } catch {
+    return {
+      recentWinRate: 50,
+      lastTradeProfit: true,
+      consecutiveWins: 0,
+      consecutiveLosses: 0,
+      avgProfitPct: 0,
+      totalPnL: 0,
+    };
+  }
+}
+
+function calculateDynamicParams(market: MarketState, performance: PerformanceState): DynamicParams {
+  // ===== ADAPTIVE EDGE THRESHOLD =====
+  // High volatility + good win rate = lower edge (more opportunities)
+  // Low volatility + bad win rate = higher edge (be selective)
+  let edgeMultiplier = 1.0;
+  
+  // Volatility adjustment: high volatility = more opportunities
+  if (market.avgVolatility > 5) edgeMultiplier *= 0.7;  // Very volatile - lower edge
+  else if (market.avgVolatility > 3) edgeMultiplier *= 0.85;
+  else if (market.avgVolatility < 1) edgeMultiplier *= 1.3; // Low volatility - be picky
+  
+  // Win rate adjustment
+  if (performance.recentWinRate >= 60) edgeMultiplier *= 0.8;  // Doing well - be aggressive
+  else if (performance.recentWinRate >= 50) edgeMultiplier *= 0.9;
+  else if (performance.recentWinRate < 40) edgeMultiplier *= 1.2; // Losing - be selective
+  
+  // Consecutive wins/losses adjustment
+  if (performance.consecutiveWins >= 3) edgeMultiplier *= 0.85; // Hot streak - ride it
+  if (performance.consecutiveLosses >= 2) edgeMultiplier *= 1.15; // Cold streak - careful
+  
+  // Market trend adjustment
+  if (market.marketTrend === 'bull') edgeMultiplier *= 0.9; // Bull market - more trades
+  else if (market.marketTrend === 'bear') edgeMultiplier *= 1.1; // Bear - be careful
+  
+  const minEdge = Math.max(0.05, Math.min(0.5, BASE_CONFIG.baseMinEdge * edgeMultiplier));
+  
+  // ===== ADAPTIVE VOLUME REQUIREMENT =====
+  let volumeMultiplier = 1.0;
+  if (market.avgVolume > 500000) volumeMultiplier = 0.8; // Good liquidity - relax
+  else if (market.avgVolume < 200000) volumeMultiplier = 1.2; // Low liquidity - strict
+  
+  const minVolume = BASE_CONFIG.baseMinVolume * volumeMultiplier;
+  
+  // ===== ADAPTIVE SPREAD =====
+  const maxSpread = market.spreadHealth > 0.7 ? 0.4 : market.spreadHealth > 0.5 ? 0.25 : 0.15;
+  
+  // ===== ADAPTIVE STOP-LOSS / TAKE-PROFIT =====
+  // High volatility = wider stops, low volatility = tighter stops
+  let slMultiplier = 1.0;
+  let tpMultiplier = 1.0;
+  
+  if (market.avgVolatility > 5) {
+    slMultiplier = 1.5; // Wider stop in volatile market
+    tpMultiplier = 1.8; // Higher target
+  } else if (market.avgVolatility > 3) {
+    slMultiplier = 1.2;
+    tpMultiplier = 1.4;
+  } else if (market.avgVolatility < 1) {
+    slMultiplier = 0.7; // Tighter stop in calm market
+    tpMultiplier = 0.8;
+  }
+  
+  // Adjust based on performance
+  if (performance.consecutiveLosses >= 2) {
+    slMultiplier *= 0.8; // Tighter stops when losing
+    tpMultiplier *= 0.9; // Take profits faster
+  }
+  if (performance.consecutiveWins >= 3) {
+    tpMultiplier *= 1.2; // Let winners run when hot
+  }
+  
+  const stopLossPct = Math.max(0.3, Math.min(2.0, BASE_CONFIG.baseStopLoss * slMultiplier));
+  const takeProfitPct = Math.max(0.5, Math.min(4.0, BASE_CONFIG.baseTakeProfit * tpMultiplier));
+  
+  // ===== ADAPTIVE POSITION SIZING =====
+  let posMultiplier = 1.0;
+  
+  if (performance.recentWinRate >= 60) posMultiplier = 1.3; // Doing well - size up
+  else if (performance.recentWinRate >= 50) posMultiplier = 1.1;
+  else if (performance.recentWinRate < 40) posMultiplier = 0.7; // Losing - size down
+  
+  if (performance.consecutiveWins >= 3) posMultiplier *= 1.2; // Hot streak bonus
+  if (performance.consecutiveLosses >= 2) posMultiplier *= 0.7; // Cold streak - reduce size
+  
+  const positionPct = Math.max(20, Math.min(70, BASE_CONFIG.positionPct * posMultiplier));
+  const maxPositionUsdt = Math.max(5, Math.min(25, BASE_CONFIG.maxPositionUsdt * posMultiplier));
+  
+  // Calculate overall aggressiveness score (0-100)
+  const aggressiveness = Math.round(
+    (1 - edgeMultiplier) * 30 + // Lower edge = more aggressive
+    (performance.recentWinRate / 100) * 40 + // Higher win rate = more aggressive
+    (market.spreadHealth) * 30 // Better spreads = more aggressive
+  );
+  
+  // Determine regime label
+  let regime = 'BALANCED';
+  if (aggressiveness >= 70) regime = 'AGGRESSIVE';
+  else if (aggressiveness >= 55) regime = 'OPPORTUNISTIC';
+  else if (aggressiveness <= 35) regime = 'DEFENSIVE';
+  else if (aggressiveness <= 20) regime = 'CONSERVATIVE';
+  
+  return {
+    minEdge,
+    minVolume,
+    maxSpread,
+    stopLossPct,
+    takeProfitPct,
+    positionPct,
+    maxPositionUsdt,
+    aggressiveness,
+    regime,
+  };
+}
+
+// Legacy CONFIG reference for compatibility
+const CONFIG = {
+  ...BASE_CONFIG,
+  minEdge: BASE_CONFIG.baseMinEdge,
+  minVolume: BASE_CONFIG.baseMinVolume,
+  maxSpread: BASE_CONFIG.baseMaxSpread,
+  stopLossPct: BASE_CONFIG.baseStopLoss,
+  takeProfitPct: BASE_CONFIG.baseTakeProfit,
   minOrderBookDepth: 3000,
-  maxPriceVolatility: 10,        // Allow more volatility
-  requirePositiveTrend: false,   // Trade in any direction
+  maxPriceVolatility: 15,
+  requirePositiveTrend: false,
 };
 
 // ===== GATE.IO API =====
@@ -118,13 +351,19 @@ async function placeExchangeProtection(
   symbol: string, 
   amount: number, 
   entryPrice: number,
-  precision: number
+  precision: number,
+  dynamicSL?: number,
+  dynamicTP?: number
 ): Promise<ExchangeProtection> {
   const amountStr = amount.toFixed(precision);
-  const stopPrice = entryPrice * (1 - CONFIG.stopLossPct / 100);
-  const tpPrice = entryPrice * (1 + CONFIG.takeProfitPct / 100);
+  // Use dynamic SL/TP if provided, otherwise fall back to config
+  const slPct = dynamicSL ?? CONFIG.stopLossPct;
+  const tpPct = dynamicTP ?? CONFIG.takeProfitPct;
+  const stopPrice = entryPrice * (1 - slPct / 100);
+  const tpPrice = entryPrice * (1 + tpPct / 100);
   
-  console.log(`🛡️ Placing exchange protection for ${symbol}: SL@$${stopPrice.toFixed(6)} TP@$${tpPrice.toFixed(6)}`);
+  console.log(`🛡️ Placing DYNAMIC protection for ${symbol}: SL@$${stopPrice.toFixed(6)} (-${slPct.toFixed(1)}%) TP@$${tpPrice.toFixed(6)} (+${tpPct.toFixed(1)}%)`);
+  
   
   const protection: ExchangeProtection = {
     symbol,
@@ -368,7 +607,7 @@ serve(async (req) => {
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    console.log(`🚀 [HYPER-MAX:${instanceId}] Starting ultra-aggressive 24/7 mode`);
+    console.log(`🚀 [HYPER-MAX:${instanceId}] Starting DYNAMIC ADAPTIVE 24/7 mode`);
 
     // Get pair info once
     const pairs = await getPairs();
@@ -384,12 +623,25 @@ serve(async (req) => {
       const cycleStart = Date.now();
 
       try {
-        // Get fresh balances
+        // Get fresh balances and tickers
         const balances = await getBalances(key, secret);
         const tickers = await getTickers();
         let usdt = balances.get('USDT') || 0;
         
-        console.log(`💰 [${cycle}] USDT: $${usdt.toFixed(2)}`);
+        // ===== DYNAMIC PARAMETER CALCULATION =====
+        const marketState = analyzeMarket(tickers);
+        const performanceState = await getPerformanceState(supabase);
+        const dynamicParams = calculateDynamicParams(marketState, performanceState);
+        
+        // Log dynamic parameters every 10 cycles
+        if (cycle % 10 === 1) {
+          console.log(`🎛️ DYNAMIC PARAMS | Edge=${dynamicParams.minEdge.toFixed(2)}% | SL=${dynamicParams.stopLossPct.toFixed(1)}% | TP=${dynamicParams.takeProfitPct.toFixed(1)}% | Pos=${dynamicParams.positionPct}% | Regime=${dynamicParams.regime} (${dynamicParams.aggressiveness})`);
+          console.log(`📈 MARKET | Vol=${marketState.avgVolatility.toFixed(1)}% | BTC=${marketState.btcChange.toFixed(1)}% | Trend=${marketState.marketTrend} | Spread=${(marketState.spreadHealth*100).toFixed(0)}%`);
+          console.log(`📊 PERF | WinRate=${performanceState.recentWinRate.toFixed(0)}% | Wins=${performanceState.consecutiveWins} | Losses=${performanceState.consecutiveLosses}`);
+        }
+        
+        console.log(`💰 [${cycle}] USDT: $${usdt.toFixed(2)} | ${dynamicParams.regime}`);
+
 
         // ===== AUTO-LIQUIDATE: Always maintain USDT =====
         if (usdt < CONFIG.liquidateThreshold) {
@@ -448,15 +700,17 @@ serve(async (req) => {
         for (const [symbol, data] of tickers) {
           if (!symbol.endsWith('_USDT')) continue;
           if (isExcluded(symbol)) continue;
-          if (failedSymbols.has(symbol)) continue; // Skip symbols that failed in this session
-          if (data.volume < CONFIG.minVolume || data.bid <= 0 || data.ask <= 0) continue;
+          if (failedSymbols.has(symbol)) continue;
+          // Use DYNAMIC volume threshold
+          if (data.volume < dynamicParams.minVolume || data.bid <= 0 || data.ask <= 0) continue;
           
           // Short cooldown
           const lastTrade = recentSymbols.get(symbol);
           if (lastTrade && now - lastTrade < CONFIG.cooldownSeconds * 1000) continue;
           
           const spread = ((data.ask - data.bid) / data.ask) * 100;
-          if (spread > CONFIG.maxSpread) continue;
+          // Use DYNAMIC spread threshold
+          if (spread > dynamicParams.maxSpread) continue;
           
           const pair = pairs.get(symbol);
           if (!pair) continue;
@@ -469,14 +723,16 @@ serve(async (req) => {
           
           let edge = 0, strat = '';
           
-          // Momentum
+          // Momentum - adjust edge calculation based on market volatility
+          const volMultiplier = marketState.avgVolatility > 3 ? 1.2 : marketState.avgVolatility < 1 ? 0.8 : 1.0;
+          
           if (data.change >= CONFIG.momentumMinChange && data.change <= CONFIG.momentumMaxChange) {
-            edge = data.change * 0.12 - spread - 0.08;
+            edge = data.change * 0.12 * volMultiplier - spread - 0.08;
             strat = 'M';
           }
           // Reversion
           else if (data.change <= CONFIG.reversionMinDrop && data.change >= CONFIG.reversionMaxDrop) {
-            edge = Math.abs(data.change) * 0.15 - spread - 0.08;
+            edge = Math.abs(data.change) * 0.15 * volMultiplier - spread - 0.08;
             strat = 'R';
           }
           // Spread capture (simple)
@@ -486,18 +742,16 @@ serve(async (req) => {
           }
           
           // ===== SPREAD ARBITRAGE: Buy + Sell instantly on same pair =====
-          // Exploit bid/ask spread: buy at ask, immediately sell at bid
-          // Net edge = spread - 2*fees (0.2% total)
           const spreadEdge = spread - 0.2;
           if (spreadEdge >= 0.1 && data.volume > 1_000_000) {
-            // High volume pairs with wide spread = arbitrage opportunity
             if (spreadEdge > edge) {
               edge = spreadEdge;
-              strat = 'ARB'; // Spread Arbitrage
+              strat = 'ARB';
             }
           }
           
-          if (edge >= CONFIG.minEdge) {
+          // Use DYNAMIC edge threshold
+          if (edge >= dynamicParams.minEdge) {
             const score = edge * Math.log10(data.volume / 50_000) / (spread + 0.05);
             opps.push({ symbol, price: data.price, edge, strat, min: pair.min, prec: pair.prec, score, minQuote: pair.minQuote, bid: data.bid, ask: data.ask });
           }
@@ -514,8 +768,8 @@ serve(async (req) => {
         // ===== EXECUTE BEST =====
         const best = opps[0];
         
-        // Calculate position size
-        let posSize = Math.min(usdt * (CONFIG.positionPct / 100), CONFIG.maxPositionUsdt);
+        // Calculate position size using DYNAMIC parameters
+        let posSize = Math.min(usdt * (dynamicParams.positionPct / 100), dynamicParams.maxPositionUsdt);
         posSize = Math.max(posSize, CONFIG.minPositionUsdt);
         posSize = Math.min(posSize, usdt * 0.95); // Leave 5% buffer
         
@@ -591,12 +845,15 @@ serve(async (req) => {
           // ===== STEP 2: PLACE EXCHANGE-SIDE PROTECTION =====
           // These orders stay on Gate.io and execute even if bot crashes!
           if (CONFIG.useExchangeOrders) {
+            // Pass DYNAMIC SL/TP to protection function
             const protection = await placeExchangeProtection(
               key, secret, 
               best.symbol, 
               boughtAmount * 0.998, // Account for fees
               buyPrice,
-              best.prec
+              best.prec,
+              dynamicParams.stopLossPct,  // Dynamic Stop Loss
+              dynamicParams.takeProfitPct  // Dynamic Take Profit
             );
             
             // Log the buy with protection info
