@@ -7,9 +7,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== REALTIME TRADING CONFIG =====
-const CONFIG = {
-  // Ultra-fast execution
+// ===== BASE CONFIG (adjusted dynamically by Market Regime) =====
+const BASE_CONFIG = {
+  // Base thresholds (will be adjusted)
   minEdge: 0.15,
   maxSpread: 0.5,
   minVolume: 100_000,
@@ -21,10 +21,10 @@ const CONFIG = {
   
   // WebSocket settings
   wsConnectTimeout: 5000,
-  tickBufferSize: 50, // Store last 50 ticks per symbol
-  analysisWindowMs: 3000, // Analyze last 3 seconds of data
+  tickBufferSize: 50,
+  analysisWindowMs: 3000,
   
-  // Pairs to monitor (top volume USDT pairs)
+  // Pairs to monitor
   watchPairs: [
     'DOGE_USDT', 'XRP_USDT', 'ADA_USDT', 'MATIC_USDT', 'LINK_USDT',
     'AVAX_USDT', 'DOT_USDT', 'UNI_USDT', 'ATOM_USDT', 'LTC_USDT',
@@ -35,8 +35,181 @@ const CONFIG = {
   // Execution limits
   maxTradesPerCycle: 3,
   cooldownMs: 2000,
-  runDurationMs: 55000, // Run for 55 seconds
+  runDurationMs: 55000,
 };
+
+// ===== MARKET REGIME TYPES =====
+type MarketRegime = 'trending_up' | 'trending_down' | 'ranging' | 'volatile' | 'crash' | 'pump';
+
+interface DynamicConfig {
+  minEdge: number;
+  maxSpread: number;
+  minVolume: number;
+  positionPct: number;
+  maxPositionUsdt: number;
+  tradingEnabled: boolean;
+  regime: MarketRegime;
+  regimeConfidence: number;
+}
+
+// ===== MARKET REGIME DETECTION =====
+function detectMarketRegime(tickBuffers: Map<string, TickBuffer>): { regime: MarketRegime; confidence: number; avgChange: number; volatility: number } {
+  const changes: number[] = [];
+  const volatilities: number[] = [];
+  
+  for (const [, buffer] of tickBuffers) {
+    if (buffer.ticks.length < 10) continue;
+    
+    const prices = buffer.ticks.slice(-20).map(t => t.price);
+    if (prices.length < 5) continue;
+    
+    // Calculate change from first to last
+    const change = ((prices[prices.length - 1] - prices[0]) / prices[0]) * 100;
+    changes.push(change);
+    
+    // Calculate volatility (standard deviation)
+    const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
+    const variance = prices.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / prices.length;
+    const stdDev = Math.sqrt(variance);
+    const volatility = (stdDev / mean) * 100;
+    volatilities.push(volatility);
+  }
+  
+  if (changes.length < 3) {
+    return { regime: 'ranging', confidence: 50, avgChange: 0, volatility: 0 };
+  }
+  
+  const avgChange = changes.reduce((a, b) => a + b, 0) / changes.length;
+  const avgVolatility = volatilities.reduce((a, b) => a + b, 0) / volatilities.length;
+  
+  // Count positive vs negative changes
+  const positiveCount = changes.filter(c => c > 0.1).length;
+  const negativeCount = changes.filter(c => c < -0.1).length;
+  const directionality = (positiveCount - negativeCount) / changes.length;
+  
+  let regime: MarketRegime;
+  let confidence: number;
+  
+  // CRASH: Strong negative movement across most pairs
+  if (avgChange < -2 && negativeCount / changes.length > 0.7) {
+    regime = 'crash';
+    confidence = Math.min(90, 50 + Math.abs(avgChange) * 10);
+  }
+  // PUMP: Strong positive movement across most pairs
+  else if (avgChange > 2 && positiveCount / changes.length > 0.7) {
+    regime = 'pump';
+    confidence = Math.min(90, 50 + avgChange * 10);
+  }
+  // VOLATILE: High volatility without clear direction
+  else if (avgVolatility > 1.5 && Math.abs(directionality) < 0.3) {
+    regime = 'volatile';
+    confidence = Math.min(85, 50 + avgVolatility * 15);
+  }
+  // TRENDING UP: Consistent positive movement
+  else if (avgChange > 0.5 && directionality > 0.4) {
+    regime = 'trending_up';
+    confidence = Math.min(80, 50 + directionality * 50);
+  }
+  // TRENDING DOWN: Consistent negative movement
+  else if (avgChange < -0.5 && directionality < -0.4) {
+    regime = 'trending_down';
+    confidence = Math.min(80, 50 + Math.abs(directionality) * 50);
+  }
+  // RANGING: Low volatility, no clear direction
+  else {
+    regime = 'ranging';
+    confidence = 60;
+  }
+  
+  return { regime, confidence, avgChange, volatility: avgVolatility };
+}
+
+// ===== DYNAMIC CONFIG BASED ON REGIME =====
+function getAdaptiveConfig(regime: MarketRegime, confidence: number): DynamicConfig {
+  switch (regime) {
+    case 'crash':
+      // HALT trading during crash - protect capital
+      return {
+        minEdge: 1.0,           // Very high edge required
+        maxSpread: 0.2,         // Only very liquid pairs
+        minVolume: 500_000,     // High volume only
+        positionPct: 10,        // Minimal position size
+        maxPositionUsdt: 5,
+        tradingEnabled: false,  // STOP trading
+        regime,
+        regimeConfidence: confidence,
+      };
+      
+    case 'pump':
+      // Aggressive during pump - ride the wave
+      return {
+        minEdge: 0.1,           // Lower edge acceptable
+        maxSpread: 0.6,
+        minVolume: 80_000,
+        positionPct: 70,        // Larger positions
+        maxPositionUsdt: 20,
+        tradingEnabled: true,
+        regime,
+        regimeConfidence: confidence,
+      };
+      
+    case 'volatile':
+      // Conservative during high volatility
+      return {
+        minEdge: 0.3,           // Higher edge required
+        maxSpread: 0.4,
+        minVolume: 200_000,     // Higher volume for safety
+        positionPct: 30,        // Smaller positions
+        maxPositionUsdt: 10,
+        tradingEnabled: true,
+        regime,
+        regimeConfidence: confidence,
+      };
+      
+    case 'trending_up':
+      // Aggressive on uptrend
+      return {
+        minEdge: 0.12,          // Lower edge OK in trend
+        maxSpread: 0.5,
+        minVolume: 100_000,
+        positionPct: 60,        // Larger positions
+        maxPositionUsdt: 18,
+        tradingEnabled: true,
+        regime,
+        regimeConfidence: confidence,
+      };
+      
+    case 'trending_down':
+      // Conservative on downtrend
+      return {
+        minEdge: 0.25,          // Higher edge for protection
+        maxSpread: 0.3,
+        minVolume: 150_000,
+        positionPct: 35,
+        maxPositionUsdt: 10,
+        tradingEnabled: true,
+        regime,
+        regimeConfidence: confidence,
+      };
+      
+    case 'ranging':
+    default:
+      // Normal parameters for ranging market
+      return {
+        minEdge: BASE_CONFIG.minEdge,
+        maxSpread: BASE_CONFIG.maxSpread,
+        minVolume: BASE_CONFIG.minVolume,
+        positionPct: BASE_CONFIG.positionPct,
+        maxPositionUsdt: BASE_CONFIG.maxPositionUsdt,
+        tradingEnabled: true,
+        regime,
+        regimeConfidence: confidence,
+      };
+  }
+}
+
+// Active config (updated dynamically)
+let CONFIG = { ...BASE_CONFIG };
 
 // ===== GATE.IO API =====
 function sign(method: string, path: string, body: string, ts: string, secret: string): string {
@@ -261,11 +434,39 @@ serve(async (req) => {
 
     // Main trading loop
     let cycle = 0;
+    let lastRegimeCheck = 0;
+    let activeConfig: DynamicConfig = getAdaptiveConfig('ranging', 60);
     const endTime = start + CONFIG.runDurationMs;
 
     while (Date.now() < endTime) {
       cycle++;
       const cycleStart = Date.now();
+
+      // ===== MARKET REGIME CHECK (every 10 cycles) =====
+      if (cycle - lastRegimeCheck >= 10 || cycle === 1) {
+        const regimeResult = detectMarketRegime(tickBuffers);
+        activeConfig = getAdaptiveConfig(regimeResult.regime, regimeResult.confidence);
+        lastRegimeCheck = cycle;
+        
+        console.log(`📊 [${cycle}] REGIME: ${activeConfig.regime.toUpperCase()} (${activeConfig.regimeConfidence.toFixed(0)}%) | Edge≥${activeConfig.minEdge.toFixed(2)}% Vol≥$${(activeConfig.minVolume/1000).toFixed(0)}K | Trading: ${activeConfig.tradingEnabled ? '✅' : '⛔'}`);
+        
+        // Log regime to system_log
+        if (cycle === 1 || regimeResult.regime !== activeConfig.regime) {
+          await supabase.from('system_log').insert({
+            level: activeConfig.tradingEnabled ? 'info' : 'warn',
+            component: 'REGIME',
+            message: `${activeConfig.regime.toUpperCase()} detected | Conf: ${activeConfig.regimeConfidence.toFixed(0)}% | AvgChange: ${regimeResult.avgChange.toFixed(2)}% | Vol: ${regimeResult.volatility.toFixed(2)}%`,
+            details: { regime: activeConfig.regime, confidence: activeConfig.regimeConfidence, minEdge: activeConfig.minEdge, minVolume: activeConfig.minVolume },
+          });
+        }
+      }
+
+      // ===== SKIP IF TRADING DISABLED (crash protection) =====
+      if (!activeConfig.tradingEnabled) {
+        console.log(`⛔ [${cycle}] Trading disabled - ${activeConfig.regime} regime`);
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
 
       // Check for stale data
       if (Date.now() - lastTickTime > 5000) {
@@ -308,7 +509,11 @@ serve(async (req) => {
         const analysis = analyzeTickBuffer(buffer);
         const latestTick = buffer.ticks[buffer.ticks.length - 1];
 
-        if (analysis.signal === 'buy' && analysis.edge >= CONFIG.minEdge) {
+        // Use DYNAMIC thresholds from activeConfig
+        if (analysis.signal === 'buy' && 
+            analysis.edge >= activeConfig.minEdge && 
+            analysis.spread <= activeConfig.maxSpread &&
+            latestTick.volume >= activeConfig.minVolume) {
           opportunities.push({
             pair,
             signal: 'buy',
@@ -337,9 +542,9 @@ serve(async (req) => {
         
         const pInfo = pairInfo.get(best.pair);
         if (pInfo) {
-          // Calculate position size
-          let posSize = Math.min(usdt * (CONFIG.positionPct / 100), CONFIG.maxPositionUsdt);
-          posSize = Math.max(posSize, CONFIG.minPositionUsdt);
+          // Calculate position size using DYNAMIC config
+          let posSize = Math.min(usdt * (activeConfig.positionPct / 100), activeConfig.maxPositionUsdt);
+          posSize = Math.max(posSize, BASE_CONFIG.minPositionUsdt);
           
           // Check minimums
           if (posSize < pInfo.minQuote) {
