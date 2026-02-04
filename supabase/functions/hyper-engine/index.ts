@@ -227,6 +227,10 @@ async function getPerformanceState(supabase: any): Promise<PerformanceState> {
 }
 
 // ===== GOAL-BASED AGGRESSION SYSTEM =====
+// Goals double daily, minimum $500/day - ULTRA AGGRESSIVE MODE
+const MIN_DAILY_GOAL = 500;
+const DAILY_MULTIPLIER = 2;
+
 interface Goal {
   id: string;
   goal_type: string;
@@ -240,8 +244,10 @@ interface Goal {
 interface GoalState {
   hasActiveGoals: boolean;
   overallProgress: number; // 0-100
-  urgencyMultiplier: number; // 0.5 to 2.0
+  urgencyMultiplier: number; // 0.5 to 3.0 (higher for $500+ goals)
   goals: Goal[];
+  dailyGoalTarget: number; // Current daily target
+  dailyGoalProgress: number; // Current daily progress
 }
 
 // deno-lint-ignore no-explicit-any
@@ -258,10 +264,17 @@ async function getGoalState(supabase: any): Promise<GoalState> {
         overallProgress: 0,
         urgencyMultiplier: 1.0,
         goals: [],
+        dailyGoalTarget: MIN_DAILY_GOAL,
+        dailyGoalProgress: 0,
       };
     }
     
     const goalsTyped = goals as Goal[];
+    
+    // Find daily profit goal
+    const dailyGoal = goalsTyped.find(g => g.goal_type === 'daily_profit');
+    const dailyGoalTarget = dailyGoal?.target_value || MIN_DAILY_GOAL;
+    const dailyGoalProgress = dailyGoal?.current_value || 0;
     
     // Calculate progress for each goal
     let totalProgress = 0;
@@ -283,29 +296,42 @@ async function getGoalState(supabase: any): Promise<GoalState> {
       
       totalProgress += progress;
       
-      // Calculate urgency based on progress
-      // Low progress + auto_adjust = more aggressive
+      // Calculate urgency based on progress and target size
+      // $500+ goals get EXTRA urgency boost
       if (goal.auto_adjust_aggression) {
-        if (progress < 25) urgencySum += 1.5;      // Way behind - be aggressive
-        else if (progress < 50) urgencySum += 1.2; // Behind schedule
-        else if (progress < 75) urgencySum += 1.0; // On track
-        else if (progress < 90) urgencySum += 0.8; // Almost there - be careful
-        else urgencySum += 0.6;                    // Nearly achieved - protect gains
+        let baseUrgency = 1.0;
+        
+        if (progress < 10) baseUrgency = 2.5;       // Way behind - ULTRA aggressive
+        else if (progress < 25) baseUrgency = 2.0;  // Very behind - very aggressive
+        else if (progress < 50) baseUrgency = 1.5;  // Behind schedule
+        else if (progress < 75) baseUrgency = 1.2;  // On track
+        else if (progress < 90) baseUrgency = 0.9;  // Almost there - be careful
+        else baseUrgency = 0.7;                     // Nearly achieved - protect gains
+        
+        // $500+ daily goals get extra boost
+        if (goal.goal_type === 'daily_profit' && goal.target_value >= MIN_DAILY_GOAL) {
+          const targetMultiplier = Math.min(3, goal.target_value / MIN_DAILY_GOAL);
+          baseUrgency *= targetMultiplier;
+        }
+        
+        urgencySum += baseUrgency;
       } else {
         urgencySum += 1.0;
       }
     }
     
     const overallProgress = goalsTyped.length > 0 ? totalProgress / goalsTyped.length : 0;
-    const urgencyMultiplier = goalsTyped.length > 0 ? urgencySum / goalsTyped.length : 1.0;
+    const urgencyMultiplier = Math.min(3.0, goalsTyped.length > 0 ? urgencySum / goalsTyped.length : 1.0);
     
-    console.log(`🎯 GOALS: ${goalsTyped.length} active | Progress: ${overallProgress.toFixed(0)}% | Urgency: ${urgencyMultiplier.toFixed(2)}x`);
+    console.log(`🎯 GOALS: Daily=$${dailyGoalTarget} (${dailyGoalProgress.toFixed(0)}/$${dailyGoalTarget}) | Urgency: ${urgencyMultiplier.toFixed(2)}x`);
     
     return {
       hasActiveGoals: true,
       overallProgress,
       urgencyMultiplier,
       goals: goalsTyped,
+      dailyGoalTarget,
+      dailyGoalProgress,
     };
   } catch (e) {
     console.log(`⚠️ Error fetching goals: ${e}`);
@@ -314,6 +340,8 @@ async function getGoalState(supabase: any): Promise<GoalState> {
       overallProgress: 0,
       urgencyMultiplier: 1.0,
       goals: [],
+      dailyGoalTarget: MIN_DAILY_GOAL,
+      dailyGoalProgress: 0,
     };
   }
 }
