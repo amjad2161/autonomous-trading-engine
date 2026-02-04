@@ -648,9 +648,24 @@ serve(async (req) => {
         console.log(`💰 [${cycle}] USDT: $${usdt.toFixed(2)} | ${dynamicParams.regime}`);
 
 
-        // ===== AUTO-LIQUIDATE: Always maintain USDT =====
+        // ===== FORCE-LIQUIDITY: Smart liquidation to maintain USDT =====
         if (usdt < CONFIG.liquidateThreshold) {
-          console.log(`💱 [${cycle}] Low USDT: $${usdt.toFixed(2)} - Liquidating...`);
+          console.log(`💱 [${cycle}] Low USDT: $${usdt.toFixed(2)} - FORCE LIQUIDITY MODE...`);
+          
+          // Step 1: Build list of all sellable assets with their values
+          interface SellableAsset {
+            currency: string;
+            symbol: string;
+            amount: number;
+            value: number;
+            minAmount: number;
+            precision: number;
+            bid: number;
+            canSell: boolean; // Above minimum order value
+          }
+          
+          const sellableAssets: SellableAsset[] = [];
+          const MIN_ORDER_VALUE = 3; // Gate.io minimum
           
           for (const [currency, amount] of balances) {
             if (CONFIG.stablecoins.includes(currency)) continue;
@@ -661,33 +676,118 @@ serve(async (req) => {
             if (!ticker || !pair) continue;
             
             const value = amount * ticker.price;
-            if (value < CONFIG.minDustValue || amount < pair.min) continue;
+            const canSell = value >= MIN_ORDER_VALUE && amount >= pair.min;
             
-            const sellAmt = Math.floor(amount * Math.pow(10, pair.prec)) / Math.pow(10, pair.prec);
-            if (sellAmt < pair.min) continue;
+            sellableAssets.push({
+              currency,
+              symbol,
+              amount,
+              value,
+              minAmount: pair.min,
+              precision: pair.prec,
+              bid: ticker.bid,
+              canSell,
+            });
+          }
+          
+          // Sort by value descending - sell biggest first for fastest liquidity
+          sellableAssets.sort((a, b) => b.value - a.value);
+          
+          // Log what we found
+          const sellable = sellableAssets.filter(a => a.canSell);
+          const dust = sellableAssets.filter(a => !a.canSell && a.value > 0.01);
+          console.log(`📊 Found ${sellable.length} sellable assets ($${sellable.reduce((s, a) => s + a.value, 0).toFixed(2)}) | ${dust.length} dust ($${dust.reduce((s, a) => s + a.value, 0).toFixed(2)})`);
+          
+          // Step 2: Calculate how much USDT we need
+          const targetUSDT = CONFIG.minPositionUsdt * 1.5; // Target 150% of minimum to have buffer
+          let neededUSDT = targetUSDT - usdt;
+          
+          // Step 3: Sell assets until we have enough USDT
+          for (const asset of sellableAssets) {
+            if (neededUSDT <= 0) {
+              console.log(`✅ Target USDT reached: $${usdt.toFixed(2)}`);
+              break;
+            }
+            
+            if (!asset.canSell) {
+              // Skip dust - can't sell below minimum
+              continue;
+            }
+            
+            console.log(`🔄 Selling ${asset.currency} ($${asset.value.toFixed(2)}) to get liquidity...`);
+            
+            const sellAmt = Math.floor(asset.amount * Math.pow(10, asset.precision)) / Math.pow(10, asset.precision);
             
             try {
               const order = await gate('POST', '/spot/orders', key, secret, {
-                currency_pair: symbol, side: 'sell', type: 'market',
-                amount: sellAmt.toFixed(pair.prec), time_in_force: 'ioc',
-              }) as { filled_total?: string; id?: string };
+                currency_pair: asset.symbol, 
+                side: 'sell', 
+                type: 'limit',
+                price: asset.bid.toFixed(8),
+                amount: sellAmt.toFixed(asset.precision), 
+                time_in_force: 'ioc',
+              }) as { filled_total?: string; id?: string; status?: string };
               
               const filled = parseFloat(order.filled_total || '0');
-              usdt += filled;
-              console.log(`✅ Sold ${currency}: +$${filled.toFixed(2)}`);
               
-              await supabase.from('trade_history').insert({
-                symbol, side: 'sell', type: 'market', amount: sellAmt,
-                price: ticker.price, actual_pnl: filled * 0.001, // Small positive for liquidation
-                order_id: order.id, status: 'executed', executed_at: new Date().toISOString(),
-              });
-              
-              trades++;
-              pnl += filled * 0.001;
+              if (filled > 0) {
+                usdt += filled;
+                neededUSDT -= filled;
+                console.log(`✅ Sold ${asset.currency}: +$${filled.toFixed(2)} | USDT now: $${usdt.toFixed(2)}`);
+                
+                await supabase.from('trade_history').insert({
+                  symbol: asset.symbol, 
+                  side: 'sell', 
+                  type: 'FORCE_LIQUIDITY', 
+                  amount: sellAmt,
+                  price: asset.bid, 
+                  actual_pnl: filled * 0.001,
+                  order_id: order.id, 
+                  status: 'executed', 
+                  executed_at: new Date().toISOString(),
+                });
+                
+                trades++;
+                pnl += filled * 0.001;
+                
+                // Update balances map
+                balances.set(asset.currency, (balances.get(asset.currency) || 0) - sellAmt);
+              } else {
+                console.log(`⚠️ Order not filled for ${asset.currency}`);
+              }
             } catch (e) {
-              console.log(`⚠️ Failed to sell ${currency}`);
+              const errMsg = e instanceof Error ? e.message : String(e);
+              console.log(`⚠️ Failed to sell ${asset.currency}: ${errMsg}`);
+            }
+            
+            // Small delay between orders
+            await new Promise(r => setTimeout(r, 100));
+          }
+          
+          // Step 4: If still no USDT, try dust conversion via API
+          if (usdt < CONFIG.minPositionUsdt && dust.length > 0) {
+            console.log(`🧹 Attempting dust conversion for ${dust.length} small balances...`);
+            
+            try {
+              // Get convertible currencies from Gate.io
+              const smallBalRes = await gate('GET', '/wallet/small_balance', key, secret) as { currencies?: string[] };
+              
+              if (smallBalRes.currencies && smallBalRes.currencies.length > 0) {
+                console.log(`✅ Found ${smallBalRes.currencies.length} currencies for dust conversion`);
+                
+                await gate('POST', '/wallet/small_balance', key, secret, {
+                  currency: smallBalRes.currencies,
+                  is_gt: true,
+                });
+                
+                console.log(`🔄 Dust conversion submitted - will convert to GT`);
+              }
+            } catch (e) {
+              console.log(`⚠️ Dust conversion not available`);
             }
           }
+          
+          console.log(`💰 Final USDT after liquidation: $${usdt.toFixed(2)}`);
         }
 
         // Skip if still no funds
