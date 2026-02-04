@@ -855,10 +855,27 @@ serve(async (req) => {
             }
           }
           
+          // ===== RAPID TRADER STRATEGY: Ultra-tight spreads for HFT-style trades =====
+          // Looking for pairs with very tight spreads (0.1-0.5%) and high liquidity
+          // These are perfect for rapid in-out trades with minimal profit targets
+          if (spread >= 0.08 && spread <= 0.5 && data.volume > 500_000) {
+            // Calculate rapid trade edge: we aim for 0.03-0.1% profit per trade
+            // Net edge = (spread * capture_rate) - fees
+            const captureRate = 0.4; // Expect to capture 40% of spread
+            const rapidEdge = (spread * captureRate) - 0.1; // minus 0.1% roundtrip fees
+            
+            if (rapidEdge > 0.02 && rapidEdge > edge) {
+              edge = rapidEdge;
+              strat = 'RAPID';
+            }
+          }
+          
           // Use DYNAMIC edge threshold
           if (edge >= dynamicParams.minEdge) {
             const score = edge * Math.log10(data.volume / 50_000) / (spread + 0.05);
-            opps.push({ symbol, price: data.price, edge, strat, min: pair.min, prec: pair.prec, score, minQuote: pair.minQuote, bid: data.bid, ask: data.ask });
+            // RAPID strategy gets priority boost for speed
+            const rapidBoost = strat === 'RAPID' ? 1.3 : 1.0;
+            opps.push({ symbol, price: data.price, edge, strat, min: pair.min, prec: pair.prec, score: score * rapidBoost, minQuote: pair.minQuote, bid: data.bid, ask: data.ask });
           }
         }
 
@@ -1026,8 +1043,54 @@ serve(async (req) => {
               sl: protection.stopLossOrderId,
               tp: protection.takeProfitOrderId,
             });
+          } else if (best.strat === 'RAPID') {
+            // ===== RAPID TRADER: Instant buy + sell for quick profit =====
+            // This strategy aims for tiny profits on each trade, high frequency
+            const boughtAmount = buyFilled / buyPrice;
+            const sellAmt = (boughtAmount * 0.998).toFixed(best.prec);
+            
+            // Small delay for order book to update
+            await new Promise(r => setTimeout(r, 50));
+            
+            // Sell at bid price for immediate fill
+            const sellOrder = await gate('POST', '/spot/orders', key, secret, {
+              currency_pair: best.symbol, 
+              side: 'sell', 
+              type: 'limit',
+              price: (best.bid || buyPrice * 1.001).toFixed(8),
+              amount: sellAmt, 
+              time_in_force: 'ioc',
+            }) as { id?: string; avg_deal_price?: string; filled_total?: string };
+            
+            const sellFilled = parseFloat(sellOrder.filled_total || '0');
+            const sellPrice = parseFloat(sellOrder.avg_deal_price || best.price.toString());
+            
+            const netPnl = sellFilled - buyFilled;
+            const netPnlPct = (netPnl / buyFilled) * 100;
+            
+            trades += 2;
+            pnl += netPnlPct;
+            
+            await supabase.from('trade_history').insert([
+              {
+                symbol: best.symbol, side: 'buy', type: 'RAPID', amount: boughtAmount,
+                price: buyPrice, expected_edge: best.edge, actual_pnl: 0,
+                order_id: buyOrder.id, status: 'executed', executed_at: new Date().toISOString(),
+              },
+              {
+                symbol: best.symbol, side: 'sell', type: 'RAPID', amount: parseFloat(sellAmt),
+                price: sellPrice, expected_edge: best.edge, actual_pnl: netPnl,
+                order_id: sellOrder.id, status: sellFilled > 0 ? 'executed' : 'unfilled', executed_at: new Date().toISOString(),
+              }
+            ]);
+            
+            const emoji = netPnl >= 0 ? '⚡' : '💨';
+            console.log(`${emoji} [${cycle}] RAPID ${best.symbol} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%) in ${Date.now() - cycleStart}ms`);
+            results.push({ t: cycle, s: best.symbol, a: 'RAPID', e: best.edge, p: netPnlPct });
+            
           } else {
             // Fallback: Instant sell (old behavior)
+            const boughtAmount = buyFilled / buyPrice;
             const sellAmt = (boughtAmount * 0.998).toFixed(best.prec);
             
             const sellOrder = await gate('POST', '/spot/orders', key, secret, {
