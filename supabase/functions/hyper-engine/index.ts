@@ -31,6 +31,9 @@ const CONFIG = {
   takeProfitPct: 1.5,
   stopLossPct: 1.0,
   
+  // Kill-Switch settings
+  maxDailyLossPct: 5.0, // Stop trading if daily loss exceeds 5%
+  
   // Auto-liquidation settings
   minDustValueUsdt: 0.5, // Minimum value to consider for liquidation
   
@@ -266,6 +269,48 @@ function isLeveragedToken(symbol: string): boolean {
   return leveragedRegex.test(symbol);
 }
 
+// Get today's P&L from trade history
+// deno-lint-ignore no-explicit-any
+async function getTodayPnL(supabase: any): Promise<{
+  totalPnL: number;
+  tradeCount: number;
+  startingBalance: number;
+}> {
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  
+  const { data: trades } = await supabase
+    .from('trade_history')
+    .select('actual_pnl, created_at')
+    .gte('created_at', todayStart.toISOString())
+    .order('created_at', { ascending: true });
+  
+  const tradesArray = trades as Array<{ actual_pnl: number | null; created_at: string }> | null;
+  const totalPnL = tradesArray?.reduce((sum, t) => sum + (t.actual_pnl || 0), 0) || 0;
+  const tradeCount = tradesArray?.length || 0;
+  
+  // Get the state at start of day (approximate from current balance minus today's P&L)
+  const { data: state } = await supabase
+    .from('trading_system_state')
+    .select('current_balance')
+    .limit(1)
+    .maybeSingle();
+  
+  const stateData = state as { current_balance: number | null } | null;
+  const currentBalance = stateData?.current_balance || 0;
+  const startingBalance = currentBalance - totalPnL;
+  
+  return { totalPnL, tradeCount, startingBalance };
+}
+
+// Check if kill-switch should be triggered
+function shouldTriggerKillSwitch(todayPnL: number, startingBalance: number): boolean {
+  if (startingBalance <= 0) return false;
+  
+  const lossPct = (todayPnL / startingBalance) * -100;
+  return lossPct >= CONFIG.maxDailyLossPct;
+}
+
 // ===== MAIN HANDLER =====
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -313,6 +358,52 @@ serve(async (req) => {
     let cycleCount = (state?.total_cycles || 0) + 1;
     let cumulativePnL = state?.total_pnl || 0;
     let cumulativeTrades = state?.total_trades || 0;
+
+    // ===== KILL-SWITCH CHECK =====
+    const todayStats = await getTodayPnL(supabase);
+    const killSwitchTriggered = shouldTriggerKillSwitch(todayStats.totalPnL, todayStats.startingBalance);
+    
+    if (killSwitchTriggered) {
+      const lossPct = todayStats.startingBalance > 0 
+        ? ((todayStats.totalPnL / todayStats.startingBalance) * -100).toFixed(2) 
+        : '0';
+      
+      console.log(`🛑 [KILL-SWITCH] Trading halted! Daily loss: ${lossPct}% (threshold: ${CONFIG.maxDailyLossPct}%)`);
+      console.log(`📊 Today's P&L: $${todayStats.totalPnL.toFixed(2)} | Trades: ${todayStats.tradeCount}`);
+      
+      // Update heartbeat but don't trade
+      const nowIso = new Date().toISOString();
+      if (state?.id) {
+        await supabase
+          .from('trading_system_state')
+          .update({
+            is_active: false, // Mark as inactive due to kill-switch
+            total_cycles: cycleCount,
+            last_heartbeat: nowIso,
+            updated_at: nowIso,
+          })
+          .eq('id', state.id);
+      }
+      
+      return new Response(JSON.stringify({
+        success: true,
+        cycle: cycleCount,
+        status: 'kill_switch_triggered',
+        killSwitch: {
+          triggered: true,
+          dailyPnL: todayStats.totalPnL,
+          dailyLossPct: parseFloat(lossPct),
+          threshold: CONFIG.maxDailyLossPct,
+          tradeCount: todayStats.tradeCount,
+        },
+        message: `Trading halted: Daily loss ${lossPct}% exceeds ${CONFIG.maxDailyLossPct}% threshold`,
+        duration: Date.now() - startTime,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    
+    console.log(`✅ Kill-switch OK: Today's P&L $${todayStats.totalPnL.toFixed(2)} (${todayStats.tradeCount} trades)`);
 
     // Get all data in parallel
     const [balances, prices, pairInfo] = await Promise.all([
