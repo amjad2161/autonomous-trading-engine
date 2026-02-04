@@ -34,9 +34,31 @@ const CONFIG = {
   minDustValue: 0.1,
   
   // Exclusions
-  excludeSymbols: ['USDT_USDT', 'USDC_USDT', 'DAI_USDT', 'FHE_USDT', 'HYPE_USDT', 'SOL_USDT', 'BTC_USDT', 'ETH_USDT'],
+  excludeSymbols: ['USDT_USDT', 'USDC_USDT', 'DAI_USDT', 'FHE_USDT'],
   excludePatterns: ['3L', '5L', '3S', '5S', '2L', '2S', 'BULL', 'BEAR'],
   stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD'],
+  
+  // ===== PRIORITY PAIRS - High volume, good liquidity =====
+  priorityPairs: [
+    // Top Market Cap - High liquidity
+    'BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'ADA_USDT',
+    'DOGE_USDT', 'AVAX_USDT', 'DOT_USDT', 'LINK_USDT', 'MATIC_USDT',
+    // Layer 1s - Good volatility
+    'NEAR_USDT', 'SUI_USDT', 'APT_USDT', 'SEI_USDT', 'INJ_USDT',
+    'TIA_USDT', 'FTM_USDT', 'ATOM_USDT', 'ALGO_USDT', 'HBAR_USDT',
+    // DeFi - Active trading
+    'UNI_USDT', 'AAVE_USDT', 'MKR_USDT', 'LDO_USDT', 'CRV_USDT',
+    // AI/Gaming - High volatility opportunities
+    'FET_USDT', 'RNDR_USDT', 'AGIX_USDT', 'IMX_USDT', 'GALA_USDT',
+    // Meme coins - Extreme volatility
+    'PEPE_USDT', 'SHIB_USDT', 'FLOKI_USDT', 'BONK_USDT', 'WIF_USDT',
+    // New/Trending
+    'ARB_USDT', 'OP_USDT', 'STX_USDT', 'ORDI_USDT', 'JUP_USDT',
+  ],
+  
+  // Scan all pairs or just priority
+  scanAllPairs: true,        // true = scan all, false = only priority
+  priorityBoost: 1.5,        // 1.5x weight for priority pairs
   
   // Cooldown to avoid repeat losses
   cooldownSeconds: 60,     // Longer cooldown (was 30)
