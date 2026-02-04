@@ -7,27 +7,27 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== PROFITABLE TRADING CONFIG =====
+// ===== PROFITABLE TRADING CONFIG - AGGRESSIVE PROFITABILITY =====
 const CONFIG = {
-  // Edge threshold - minimum expected profit to execute trade
-  minEdge: 0.3,            // 0.3% minimum edge (was 0.5%)
-  minVolume: 200_000,      // Higher volume = better fills
-  maxSpread: 0.3,          // Tighter spread requirement
+  // HIGHER edge threshold to GUARANTEE profit after fees (0.2% maker+taker)
+  minEdge: 0.7,            // 0.7% minimum edge (covers fees + profit margin)
+  minVolume: 300_000,      // Higher volume = better fills, less slippage
+  maxSpread: 0.15,         // TIGHTER spread - max 0.15% (was 0.3%)
   
-  // Strategy thresholds
-  momentumMinChange: 1.5,  // Stronger momentum required
-  momentumMaxChange: 30,
-  reversionMinDrop: -2.0,  // Deeper drop for reversion
-  reversionMaxDrop: -40,
+  // Strategy thresholds - MORE SELECTIVE
+  momentumMinChange: 2.0,  // Stronger momentum required (was 1.5%)
+  momentumMaxChange: 25,   // Avoid parabolic moves that reverse fast
+  reversionMinDrop: -3.0,  // Deeper drop for reversion (was -2%)
+  reversionMaxDrop: -30,   // Avoid death spirals
   
-  // Position sizing
+  // Position sizing - CONSERVATIVE
   minPositionUsdt: 3,
-  maxPositionUsdt: 10,
-  positionPct: 50,         // 50% of balance
+  maxPositionUsdt: 8,      // Smaller max to reduce risk
+  positionPct: 40,         // 40% of balance (was 50%)
   
   // Continuous operation
   burstDurationMs: 55000,
-  cycleIntervalMs: 2000,   // Slower - every 2 seconds
+  cycleIntervalMs: 3000,   // Slower - every 3 seconds (more analysis time)
   
   // Auto-liquidation
   liquidateThreshold: 3,
@@ -39,20 +39,24 @@ const CONFIG = {
   stablecoins: ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD'],
   
   // Cooldown to avoid repeat losses
-  cooldownSeconds: 30,
+  cooldownSeconds: 60,     // Longer cooldown (was 30)
   
   // ===== EXCHANGE-SIDE PROTECTION =====
-  // Stop-Loss and Take-Profit placed on Gate.io immediately after each buy
-  stopLossPct: 1.5,        // -1.5% Stop-Loss (exchange-side protection)
-  takeProfitPct: 3.0,      // +3% Take-Profit target
-  trailingStopPct: 1.0,    // 1% trailing distance after TP1
-  useExchangeOrders: true, // Place SL/TP orders on Gate.io (not just software)
+  stopLossPct: 1.0,        // TIGHTER -1% Stop-Loss (was 1.5%)
+  takeProfitPct: 2.0,      // FASTER +2% Take-Profit (was 3%)
+  trailingStopPct: 0.7,    // Tighter trailing (was 1%)
+  useExchangeOrders: true,
   
   // ===== LOSS STREAK PROTECTION =====
-  maxConsecutiveLosses: 3,     // Stop after 3 consecutive losses
-  lossStreakCooldownMs: 300000, // 5 minute cooldown after loss streak
-  minWinRateToTrade: 30,       // Minimum win rate % to continue trading
-  recentTradesToCheck: 10,     // Check last 10 trades for win rate
+  maxConsecutiveLosses: 2,     // Stop after 2 consecutive losses (was 3)
+  lossStreakCooldownMs: 600000, // 10 minute cooldown (was 5)
+  minWinRateToTrade: 40,       // Require 40% win rate (was 30%)
+  recentTradesToCheck: 10,
+  
+  // ===== NEW: QUALITY FILTERS =====
+  minOrderBookDepth: 5000,     // Minimum order book depth in USDT
+  maxPriceVolatility: 5,       // Max 5% volatility in last hour
+  requirePositiveTrend: true,  // Only trade with trend
 };
 
 // ===== GATE.IO API =====
