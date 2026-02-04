@@ -174,6 +174,39 @@ export function MasterControlPanel() {
     }
   }
 
+  async function forceAggressiveCycle() {
+    setIsLoading(true);
+    toast.info('מפעיל מחזור אגרסיבי מאולץ...');
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('hyper-engine', {
+        body: {}
+      });
+      
+      if (error) throw error;
+      
+      const trades = data?.trades || 0;
+      const pnl = data?.pnl || 0;
+      
+      if (trades > 0) {
+        toast.success(`מחזור הושלם! ${trades} עסקאות | P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`);
+      } else {
+        toast.info('מחזור הושלם - לא נמצאו הזדמנויות');
+      }
+      
+      fetchSystemState();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      if (msg.includes('context canceled') || msg.includes('timeout')) {
+        toast.info('המחזור רץ ברקע (55 שניות)');
+      } else {
+        toast.error(`שגיאה: ${msg}`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   const totalAlloc = momentumAlloc + whaleAlloc + gridAlloc + dcaAlloc;
 
   return (
@@ -228,6 +261,17 @@ export function MasterControlPanel() {
             AI Optimize
           </Button>
         </div>
+
+        {/* Force Aggressive Cycle Button */}
+        <Button
+          onClick={forceAggressiveCycle}
+          disabled={isLoading}
+          variant="destructive"
+          className="w-full"
+        >
+          <Zap className="h-4 w-4 mr-2" />
+          {isLoading ? 'מריץ מחזור...' : '⚡ מחזור אגרסיבי מאולץ'}
+        </Button>
 
         {/* Paper Trading Toggle */}
         <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
