@@ -47,6 +47,12 @@ const CONFIG = {
   takeProfitPct: 3.0,      // +3% Take-Profit target
   trailingStopPct: 1.0,    // 1% trailing distance after TP1
   useExchangeOrders: true, // Place SL/TP orders on Gate.io (not just software)
+  
+  // ===== LOSS STREAK PROTECTION =====
+  maxConsecutiveLosses: 3,     // Stop after 3 consecutive losses
+  lossStreakCooldownMs: 300000, // 5 minute cooldown after loss streak
+  minWinRateToTrade: 30,       // Minimum win rate % to continue trading
+  recentTradesToCheck: 10,     // Check last 10 trades for win rate
 };
 
 // ===== GATE.IO API =====
@@ -259,6 +265,81 @@ serve(async (req) => {
       await supabase.from('trading_system_state').update({
         last_heartbeat: new Date().toISOString(),
       }).eq('id', stateData.id);
+    }
+
+    // ===== LOSS STREAK PROTECTION - Check recent trades =====
+    const { data: recentTrades } = await supabase
+      .from('trade_history')
+      .select('actual_pnl, executed_at')
+      .eq('side', 'sell')
+      .order('executed_at', { ascending: false })
+      .limit(CONFIG.recentTradesToCheck);
+
+    let consecutiveLosses = 0;
+    let wins = 0;
+    let losses = 0;
+    let lossStreakHalted = false;
+
+    if (recentTrades && recentTrades.length > 0) {
+      // Count consecutive losses from most recent
+      for (const trade of recentTrades) {
+        if ((trade.actual_pnl || 0) < 0) {
+          consecutiveLosses++;
+        } else {
+          break; // Stop counting when we hit a win
+        }
+      }
+
+      // Calculate overall win rate
+      for (const trade of recentTrades) {
+        if ((trade.actual_pnl || 0) >= 0) {
+          wins++;
+        } else {
+          losses++;
+        }
+      }
+
+      const winRate = recentTrades.length > 0 ? (wins / recentTrades.length) * 100 : 50;
+
+      // Check if we should halt trading
+      if (consecutiveLosses >= CONFIG.maxConsecutiveLosses) {
+        console.log(`🛑 LOSS STREAK PROTECTION: ${consecutiveLosses} consecutive losses detected!`);
+        
+        await supabase.from('system_log').insert({
+          level: 'warn',
+          component: 'HYPER_PROTECTION',
+          message: `Trading halted: ${consecutiveLosses} consecutive losses`,
+          details: { consecutiveLosses, winRate, recentTrades: recentTrades.length },
+        });
+        
+        lossStreakHalted = true;
+      }
+
+      if (winRate < CONFIG.minWinRateToTrade && recentTrades.length >= 5) {
+        console.log(`🛑 LOW WIN RATE PROTECTION: ${winRate.toFixed(1)}% < ${CONFIG.minWinRateToTrade}%`);
+        
+        await supabase.from('system_log').insert({
+          level: 'warn',
+          component: 'HYPER_PROTECTION',
+          message: `Trading halted: Win rate ${winRate.toFixed(1)}% below minimum`,
+          details: { winRate, wins, losses, total: recentTrades.length },
+        });
+        
+        lossStreakHalted = true;
+      }
+
+      console.log(`📊 Recent performance: ${wins}W/${losses}L (${winRate.toFixed(1)}%) | Streak: ${consecutiveLosses} losses`);
+    }
+
+    if (lossStreakHalted) {
+      return new Response(JSON.stringify({
+        success: true,
+        action: 'halted',
+        reason: 'Loss streak protection activated',
+        consecutiveLosses,
+        winRate: recentTrades ? (wins / recentTrades.length) * 100 : 0,
+        cooldownMinutes: CONFIG.lossStreakCooldownMs / 60000,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     console.log(`🚀 [HYPER-MAX:${instanceId}] Starting ultra-aggressive 24/7 mode`);
