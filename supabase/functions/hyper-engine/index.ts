@@ -471,6 +471,170 @@ async function cancelProtection(key: string, secret: string, protection: Exchang
   }
 }
 
+// ===== EMERGENCY FULL LIQUIDATION =====
+// Convert ALL holdings to USDT - called at end of every burst, on errors, and on shutdown
+// deno-lint-ignore no-explicit-any
+async function emergencyLiquidateAll(
+  key: string, 
+  secret: string, 
+  reason: string,
+  supabase: any
+): Promise<{ liquidated: number; totalUsdt: number; assets: string[] }> {
+  console.log(`🚨 [EMERGENCY LIQUIDATION] Reason: ${reason}`);
+  
+  const results = { liquidated: 0, totalUsdt: 0, assets: [] as string[] };
+  
+  try {
+    // Get all balances
+    const accounts = await gate('GET', '/spot/accounts', key, secret) as Array<{ currency: string; available: string }>;
+    const balances = new Map<string, number>();
+    for (const a of accounts) {
+      const val = parseFloat(a.available);
+      if (val > 0) balances.set(a.currency, val);
+    }
+    
+    results.totalUsdt = balances.get('USDT') || 0;
+    console.log(`💰 Starting USDT: $${results.totalUsdt.toFixed(2)}`);
+    
+    // Get tickers and pairs
+    const tickers = await getTickers();
+    const pairs = await getPairs();
+    
+    // Find all sellable assets
+    const STABLECOINS = ['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD', 'USD'];
+    const MIN_ORDER_VALUE = 3; // Gate.io minimum
+    
+    interface AssetToSell {
+      currency: string;
+      symbol: string;
+      amount: number;
+      value: number;
+      bid: number;
+      precision: number;
+      minAmount: number;
+    }
+    
+    const assetsToSell: AssetToSell[] = [];
+    
+    for (const [currency, amount] of balances) {
+      if (STABLECOINS.includes(currency)) continue;
+      
+      const symbol = `${currency}_USDT`;
+      const ticker = tickers.get(symbol);
+      const pair = pairs.get(symbol);
+      
+      if (!ticker || !pair) continue;
+      
+      const value = amount * ticker.price;
+      if (value < 0.01) continue; // Skip dust < $0.01
+      
+      assetsToSell.push({
+        currency,
+        symbol,
+        amount,
+        value,
+        bid: ticker.bid,
+        precision: pair.prec,
+        minAmount: pair.min,
+      });
+    }
+    
+    // Sort by value descending (largest first)
+    assetsToSell.sort((a, b) => b.value - a.value);
+    
+    console.log(`🔍 Found ${assetsToSell.length} assets to liquidate ($${assetsToSell.reduce((s, a) => s + a.value, 0).toFixed(2)} total)`);
+    
+    // Liquidate all assets
+    for (const asset of assetsToSell) {
+      try {
+        // Check if we can sell (above minimum order)
+        if (asset.value < MIN_ORDER_VALUE || asset.amount < asset.minAmount) {
+          console.log(`⏭️ Skip ${asset.currency} - below minimum ($${asset.value.toFixed(2)})`);
+          continue;
+        }
+        
+        const sellAmount = Math.floor(asset.amount * Math.pow(10, asset.precision)) / Math.pow(10, asset.precision);
+        
+        console.log(`🔄 Selling ${asset.currency}: ${sellAmount.toFixed(asset.precision)} (~$${asset.value.toFixed(2)})`);
+        
+        const order = await gate('POST', '/spot/orders', key, secret, {
+          currency_pair: asset.symbol,
+          side: 'sell',
+          type: 'limit',
+          price: asset.bid.toFixed(8),
+          amount: sellAmount.toFixed(asset.precision),
+          time_in_force: 'ioc',
+        }) as { filled_total?: string; id?: string };
+        
+        const filled = parseFloat(order.filled_total || '0');
+        
+        if (filled > 0) {
+          results.liquidated++;
+          results.totalUsdt += filled;
+          results.assets.push(`${asset.currency}: +$${filled.toFixed(2)}`);
+          
+          console.log(`✅ Sold ${asset.currency}: +$${filled.toFixed(2)}`);
+          
+          // Log to trade_history
+          await supabase.from('trade_history').insert({
+            symbol: asset.symbol,
+            side: 'sell',
+            type: 'EMERGENCY_LIQUIDATE',
+            amount: sellAmount,
+            price: asset.bid,
+            actual_pnl: filled * 0.001, // Minimal profit attribution
+            order_id: order.id,
+            status: 'executed',
+            executed_at: new Date().toISOString(),
+          });
+        } else {
+          console.log(`⚠️ ${asset.currency} not filled`);
+        }
+        
+        // Small delay between orders
+        await new Promise(r => setTimeout(r, 50));
+        
+      } catch (e) {
+        console.log(`⚠️ Failed to sell ${asset.currency}: ${e instanceof Error ? e.message : 'Unknown'}`);
+      }
+    }
+    
+    // Try dust conversion for remaining small balances
+    try {
+      const smallBalRes = await gate('GET', '/wallet/small_balance', key, secret) as { currencies?: string[] };
+      if (smallBalRes.currencies && smallBalRes.currencies.length > 0) {
+        console.log(`🧹 Converting ${smallBalRes.currencies.length} dust balances to GT`);
+        await gate('POST', '/wallet/small_balance', key, secret, {
+          currency: smallBalRes.currencies,
+          is_gt: true,
+        });
+      }
+    } catch (e) {
+      // Dust conversion not available
+    }
+    
+    // Get final USDT balance
+    const finalAccounts = await gate('GET', '/spot/accounts', key, secret) as Array<{ currency: string; available: string }>;
+    const finalUsdt = finalAccounts.find(a => a.currency === 'USDT');
+    results.totalUsdt = parseFloat(finalUsdt?.available || '0');
+    
+    console.log(`✅ [EMERGENCY LIQUIDATION COMPLETE] Sold ${results.liquidated} assets | Final USDT: $${results.totalUsdt.toFixed(2)}`);
+    
+    // Log to system_log
+    await supabase.from('system_log').insert({
+      level: 'info',
+      component: 'EMERGENCY_LIQUIDATION',
+      message: `${reason}: Liquidated ${results.liquidated} assets`,
+      details: results,
+    });
+    
+  } catch (e) {
+    console.error(`❌ Emergency liquidation error: ${e instanceof Error ? e.message : 'Unknown'}`);
+  }
+  
+  return results;
+}
+
 async function getBalances(key: string, secret: string): Promise<Map<string, number>> {
   const accounts = await gate('GET', '/spot/accounts', key, secret) as Array<{ currency: string; available: string }>;
   const map = new Map<string, number>();
@@ -1042,29 +1206,36 @@ serve(async (req) => {
         
         // ===== CALCULATE AMOUNT =====
         const mult = Math.pow(10, best.prec);
+        
+        // Calculate the minimum amount needed to reach minOrderValue
+        const minAmountForValue = minOrderValue / best.price;
+        
+        // Start with position size based amount
         let amount = posSize / best.price;
         
-        // Ensure amount is at least the minimum
-        if (amount < best.min) {
-          amount = best.min * 1.05;
-        }
+        // Ensure amount meets minimum requirements
+        amount = Math.max(amount, best.min * 1.02, minAmountForValue * 1.02);
         
-        // Round to precision
-        amount = Math.floor(amount * mult) / mult;
+        // Round UP to precision to ensure we always meet minimums
+        amount = Math.ceil(amount * mult) / mult;
         
-        // If rounding made it too small, round UP
-        if (amount < best.min) {
-          amount = Math.ceil(best.min * 1.01 * mult) / mult;
-        }
-        
-        // Final validation
+        // Final validation - check the actual order value
         const orderValue = amount * best.price;
         
         console.log(`📊 [${cycle}] ${best.symbol}: amt=${amount.toFixed(best.prec)} val=$${orderValue.toFixed(2)} | min=${best.min} minOrd=$${minOrderValue.toFixed(2)}`);
         
-        if (orderValue > usdt * 0.98 || orderValue < minOrderValue * 0.99 || amount < best.min) {
-          console.log(`⏭️ [${cycle}] Validation fail: val=$${orderValue.toFixed(2)} bal=$${usdt.toFixed(2)} minOrd=$${minOrderValue.toFixed(2)} amt=${amount.toFixed(best.prec)} min=${best.min}`);
-          results.push({ t: cycle, s: best.symbol, a: 'skip', e: best.edge });
+        // Skip if we can't afford it or doesn't meet minimums
+        if (orderValue > usdt * 0.98) {
+          console.log(`⏭️ [${cycle}] Can't afford ${best.symbol}: val=$${orderValue.toFixed(2)} > 98% of $${usdt.toFixed(2)}`);
+          results.push({ t: cycle, s: best.symbol, a: 'expensive' });
+          failedSymbols.add(best.symbol);
+          await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
+          continue;
+        }
+        
+        if (amount < best.min || orderValue < minOrderValue * 0.98) {
+          console.log(`⏭️ [${cycle}] Below min: amt=${amount.toFixed(best.prec)} min=${best.min} val=$${orderValue.toFixed(2)} minOrd=$${minOrderValue.toFixed(2)}`);
+          results.push({ t: cycle, s: best.symbol, a: 'skip' });
           await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
           continue;
         }
@@ -1205,6 +1376,11 @@ serve(async (req) => {
       }
     }
 
+    // ===== END-OF-BURST LIQUIDATION =====
+    // Always convert everything back to USDT at end of burst
+    console.log(`🏁 Burst complete - liquidating all holdings to USDT...`);
+    const endLiquidation = await emergencyLiquidateAll(key, secret, 'END_OF_BURST', supabase);
+
     // Update state at end
     if (stateData?.id) {
       await supabase.from('trading_system_state').update({
@@ -1218,7 +1394,7 @@ serve(async (req) => {
     }
 
     const duration = Date.now() - start;
-    console.log(`🏁 [HYPER-MAX] ${cycle} cycles | ${trades} trades | +${pnl.toFixed(3)}% | ${duration}ms`);
+    console.log(`🏁 [HYPER-MAX] ${cycle} cycles | ${trades} trades | +${pnl.toFixed(3)}% | ${duration}ms | Final USDT: $${endLiquidation.totalUsdt.toFixed(2)}`);
 
     return new Response(JSON.stringify({
       success: true,
@@ -1227,14 +1403,31 @@ serve(async (req) => {
       pnl,
       duration,
       results: results.slice(-20),
+      endLiquidation: {
+        liquidated: endLiquidation.liquidated,
+        finalUsdt: endLiquidation.totalUsdt,
+        assets: endLiquidation.assets,
+      },
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    console.error('❌ Fatal:', error);
+    // ===== ERROR HANDLER: EMERGENCY LIQUIDATION =====
+    console.error('❌ Fatal error - triggering emergency liquidation...');
+    
+    const key = Deno.env.get('GATE_API_KEY');
+    const secret = Deno.env.get('GATE_API_SECRET');
+    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    
+    let emergencyResult = null;
+    if (key && secret) {
+      emergencyResult = await emergencyLiquidateAll(key, secret, `FATAL_ERROR: ${error instanceof Error ? error.message : 'Unknown'}`, supabase);
+    }
+    
     return new Response(JSON.stringify({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown',
       duration: Date.now() - start,
+      emergencyLiquidation: emergencyResult,
     }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
