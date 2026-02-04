@@ -1654,7 +1654,6 @@ serve(async (req) => {
               ask: data.ask 
             });
           }
-          }
         }
 
         opps.sort((a, b) => b.score - a.score);
@@ -1943,27 +1942,20 @@ serve(async (req) => {
         assets: endLiquidation.assets,
       },
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
   } catch (error) {
     // ===== ERROR HANDLER: EMERGENCY LIQUIDATION =====
-    console.error('Fatal error - triggering emergency liquidation...');
+    console.error('Fatal error - triggering emergency liquidation...', error);
     
-    const key = Deno.env.get('GATE_API_KEY');
-    const secret = Deno.env.get('GATE_API_SECRET');
-    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    const gateKey = Deno.env.get('GATE_API_KEY');
+    const gateSecret = Deno.env.get('GATE_API_SECRET');
+    const supabaseClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
     
     let emergencyResult = null;
-    if (key && secret) {
-      emergencyResult = await emergencyLiquidateAll(key, secret, `FATAL_ERROR: ${error instanceof Error ? error.message : 'Unknown'}`, supabase);
+    if (gateKey && gateSecret) {
+      emergencyResult = await emergencyLiquidateAll(gateKey, gateSecret, `FATAL_ERROR: ${error instanceof Error ? error.message : 'Unknown'}`, supabaseClient);
     }
     
-    return new Response(JSON.stringify({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown',
-      duration: Date.now() - start,
-      emergencyLiquidation: emergencyResult,
-    }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-});
     return new Response(JSON.stringify({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown',
