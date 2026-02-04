@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 import { 
   Zap, 
   Activity, 
@@ -15,7 +17,10 @@ import {
   DollarSign,
   CheckCircle,
   XCircle,
-  Pause
+  Pause,
+  ShieldOff,
+  RefreshCw,
+  AlertTriangle
 } from "lucide-react";
 
 interface EngineState {
@@ -25,9 +30,20 @@ interface EngineState {
   totalPnL: number;
   lastHeartbeat: string;
   successfulTrades: number;
+  isActive: boolean;
+  killSwitchResetAt: string | null;
+}
+
+interface KillSwitchStatus {
+  isTriggered: boolean;
+  dailyPnL: number;
+  dailyLossPct: number;
+  tradeCount: number;
 }
 
 export function HyperEnginePanel() {
+  const { toast } = useToast();
+  
   const [engineState, setEngineState] = useState<EngineState>({
     isRunning: false,
     totalCycles: 0,
@@ -35,15 +51,26 @@ export function HyperEnginePanel() {
     totalPnL: 0,
     lastHeartbeat: '',
     successfulTrades: 0,
+    isActive: true,
+    killSwitchResetAt: null,
+  });
+  
+  const [killSwitchStatus, setKillSwitchStatus] = useState<KillSwitchStatus>({
+    isTriggered: false,
+    dailyPnL: 0,
+    dailyLossPct: 0,
+    tradeCount: 0,
   });
   
   const [isConnected, setIsConnected] = useState(false);
-  const [recentStatus, setRecentStatus] = useState<'running' | 'idle' | 'error'>('idle');
+  const [recentStatus, setRecentStatus] = useState<'running' | 'idle' | 'error' | 'halted'>('idle');
+  const [isResetting, setIsResetting] = useState(false);
   
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetchEngineState();
+    fetchTodayPnL();
     
     // Real-time subscription
     const channel = supabase
@@ -66,7 +93,10 @@ export function HyperEnginePanel() {
       });
     
     // Polling fallback every 10 seconds
-    pollingRef.current = setInterval(fetchEngineState, 10000);
+    pollingRef.current = setInterval(() => {
+      fetchEngineState();
+      fetchTodayPnL();
+    }, 10000);
     
     return () => {
       channel.unsubscribe();
@@ -76,6 +106,8 @@ export function HyperEnginePanel() {
 
   function updateFromPayload(data: Record<string, unknown>) {
     const lastHeartbeat = data.last_heartbeat as string;
+    const isActive = data.is_active as boolean;
+    
     setEngineState(prev => ({
       ...prev,
       totalCycles: (data.total_cycles as number) || prev.totalCycles,
@@ -84,10 +116,14 @@ export function HyperEnginePanel() {
       successfulTrades: (data.successful_trades as number) || prev.successfulTrades,
       lastHeartbeat: lastHeartbeat || prev.lastHeartbeat,
       isRunning: checkIfRunning(lastHeartbeat),
+      isActive: isActive ?? prev.isActive,
+      killSwitchResetAt: (data.kill_switch_reset_at as string) || prev.killSwitchResetAt,
     }));
     
-    // Update status based on recency
-    if (checkIfRunning(lastHeartbeat)) {
+    // Update status based on recency and active state
+    if (!isActive) {
+      setRecentStatus('halted');
+    } else if (checkIfRunning(lastHeartbeat)) {
       setRecentStatus('running');
     }
   }
@@ -108,6 +144,8 @@ export function HyperEnginePanel() {
       
       if (data) {
         const isRunning = checkIfRunning(data.last_heartbeat || '');
+        const stateData = data as Record<string, unknown>;
+        
         setEngineState({
           isRunning,
           totalCycles: data.total_cycles || 0,
@@ -115,21 +153,15 @@ export function HyperEnginePanel() {
           totalPnL: data.total_pnl || 0,
           successfulTrades: data.successful_trades || 0,
           lastHeartbeat: data.last_heartbeat || '',
+          isActive: data.is_active ?? true,
+          killSwitchResetAt: (stateData.kill_switch_reset_at as string) || null,
         });
         
-        setRecentStatus(isRunning ? 'running' : 'idle');
-      }
-      
-      // Also fetch recent trade stats
-      const { data: recentTrades } = await supabase
-        .from('trade_history')
-        .select('status, actual_pnl')
-        .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
-      
-      if (recentTrades) {
-        const executed = recentTrades.filter(t => t.status === 'executed' || t.status === 'simulated');
-        const failed = recentTrades.filter(t => t.status === 'failed');
-        // Stats available if needed
+        if (!data.is_active) {
+          setRecentStatus('halted');
+        } else {
+          setRecentStatus(isRunning ? 'running' : 'idle');
+        }
       }
     } catch (e) {
       console.error('Error fetching engine state:', e);
@@ -137,7 +169,86 @@ export function HyperEnginePanel() {
     }
   }
 
+  async function fetchTodayPnL() {
+    try {
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      
+      const { data: trades } = await supabase
+        .from('trade_history')
+        .select('actual_pnl')
+        .gte('created_at', todayStart.toISOString());
+      
+      if (trades) {
+        const dailyPnL = trades.reduce((sum, t) => sum + (t.actual_pnl || 0), 0);
+        const tradeCount = trades.length;
+        
+        // Simple approximation - if system is halted and daily P&L is negative
+        const isTriggered = !engineState.isActive && dailyPnL < 0;
+        const dailyLossPct = Math.abs(dailyPnL);
+        
+        setKillSwitchStatus({
+          isTriggered,
+          dailyPnL,
+          dailyLossPct,
+          tradeCount,
+        });
+      }
+    } catch (e) {
+      console.error('Error fetching today PnL:', e);
+    }
+  }
+
+  async function handleResetKillSwitch() {
+    setIsResetting(true);
+    try {
+      const { data: state } = await supabase
+        .from('trading_system_state')
+        .select('id')
+        .limit(1)
+        .maybeSingle();
+      
+      if (state?.id) {
+        const now = new Date().toISOString();
+        await supabase
+          .from('trading_system_state')
+          .update({
+            is_active: true,
+            kill_switch_reset_at: now,
+            updated_at: now,
+          } as Record<string, unknown>)
+          .eq('id', state.id);
+        
+        toast({
+          title: "Kill-Switch אופס",
+          description: "המסחר יחודש במחזור הבא",
+        });
+        
+        setRecentStatus('idle');
+        setKillSwitchStatus(prev => ({ ...prev, isTriggered: false }));
+        fetchEngineState();
+      }
+    } catch (e) {
+      console.error('Error resetting kill-switch:', e);
+      toast({
+        title: "שגיאה",
+        description: "לא ניתן לאפס את ה-Kill-Switch",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResetting(false);
+    }
+  }
+
   const getStatusBadge = () => {
+    if (recentStatus === 'halted') {
+      return (
+        <Badge variant="destructive">
+          <ShieldOff className="h-3 w-3 mr-1" />
+          Kill-Switch
+        </Badge>
+      );
+    }
     if (recentStatus === 'running') {
       return (
         <Badge className="bg-green-500/20 text-green-400 border-green-500/50">
@@ -174,17 +285,17 @@ export function HyperEnginePanel() {
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
-            <Zap className={`h-5 w-5 ${recentStatus === 'running' ? 'text-yellow-500 animate-pulse' : 'text-muted-foreground'}`} />
+            <Zap className={`h-5 w-5 ${recentStatus === 'running' ? 'text-primary animate-pulse' : recentStatus === 'halted' ? 'text-destructive' : 'text-muted-foreground'}`} />
             Hyper Engine
           </CardTitle>
           <div className="flex items-center gap-2">
             {isConnected ? (
-              <Badge variant="outline" className="text-xs border-green-500/50 text-green-500">
+              <Badge variant="outline" className="text-xs border-primary/50 text-primary">
                 <Wifi className="h-3 w-3 mr-1" />
                 Live
               </Badge>
             ) : (
-              <Badge variant="outline" className="text-xs border-orange-500/50 text-orange-500">
+              <Badge variant="outline" className="text-xs border-muted-foreground/50 text-muted-foreground">
                 <WifiOff className="h-3 w-3 mr-1" />
                 Polling
               </Badge>
@@ -195,16 +306,47 @@ export function HyperEnginePanel() {
       </CardHeader>
       
       <CardContent className="space-y-4">
-        {/* Server Status Banner */}
-        <div className="p-3 bg-primary/10 border border-primary/30 rounded-lg">
-          <div className="flex items-center gap-2 mb-1">
-            <Zap className="h-4 w-4 text-primary" />
-            <span className="font-medium text-sm">מנוע אוטונומי בשרת</span>
+        {/* Kill-Switch Alert */}
+        {recentStatus === 'halted' && (
+          <div className="p-3 bg-destructive/10 border border-destructive/50 rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-destructive" />
+                <span className="font-medium text-sm text-destructive">Kill-Switch פעיל</span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleResetKillSwitch}
+                disabled={isResetting}
+                className="h-7 text-xs border-destructive/50 hover:bg-destructive/10"
+              >
+                {isResetting ? (
+                  <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                )}
+                אפס Kill-Switch
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              המסחר הופסק עקב הפסד יומי מעל 5%. P&L היום: {killSwitchStatus.dailyPnL.toFixed(2)}%
+            </p>
           </div>
-          <p className="text-xs text-muted-foreground">
-            המנוע רץ אוטומטית כל דקה ב-background, ללא צורך בחלון פתוח.
-          </p>
-        </div>
+        )}
+
+        {/* Server Status Banner */}
+        {recentStatus !== 'halted' && (
+          <div className="p-3 bg-primary/10 border border-primary/30 rounded-lg">
+            <div className="flex items-center gap-2 mb-1">
+              <Zap className="h-4 w-4 text-primary" />
+              <span className="font-medium text-sm">מנוע אוטונומי בשרת</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              המנוע רץ אוטומטית כל דקה ב-background, ללא צורך בחלון פתוח.
+            </p>
+          </div>
+        )}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 gap-2">
