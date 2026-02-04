@@ -974,10 +974,10 @@ serve(async (req) => {
           continue;
         }
 
-        // Execute - BUY + PLACE EXCHANGE PROTECTION (SL/TP on Gate.io)
+        // Execute - BUY + INSTANT SELL (no position holding!)
         try {
           const amountStr = amount.toFixed(best.prec);
-          console.log(`⚡ [${cycle}] ${best.strat} ${best.symbol}: Buy + Place SL/TP | Edge=${best.edge.toFixed(3)}%`);
+          console.log(`⚡ [${cycle}] ${best.strat} ${best.symbol}: Buy+Sell | Edge=${best.edge.toFixed(3)}%`);
           
           // ===== STEP 1: BUY =====
           const buyOrder = await gate('POST', '/spot/orders', key, secret, {
@@ -1002,9 +1002,13 @@ serve(async (req) => {
           // Calculate actual bought amount from USDT filled
           const boughtAmount = buyFilled / buyPrice;
           
-          // ===== STEP 2: PLACE EXCHANGE-SIDE PROTECTION =====
-          // These orders stay on Gate.io and execute even if bot crashes!
-          if (CONFIG.useExchangeOrders) {
+          // ===== STEP 2: EXECUTE STRATEGY =====
+          // RAPID/ARB strategies: Instant buy+sell (no position holding)
+          // M/R/S strategies: Also instant buy+sell for safety
+          // Only use exchange protection for very specific long-hold strategies
+          const useInstantSell = ['RAPID', 'ARB', 'M', 'R', 'S'].includes(best.strat);
+          
+          if (!useInstantSell && CONFIG.useExchangeOrders) {
             // Pass DYNAMIC SL/TP to protection function
             const protection = await placeExchangeProtection(
               key, secret, 
