@@ -62,3 +62,6 @@ verify_jwt = false
 
 [functions.dust-converter]
 verify_jwt = false
+
+[functions.rapid-trader]
+verify_jwt = false
