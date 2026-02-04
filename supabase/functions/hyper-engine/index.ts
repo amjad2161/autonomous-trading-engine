@@ -1355,11 +1355,18 @@ serve(async (req) => {
           // ===============================================
           // Price flat but volume high = smart money buying
           // Wait for breakout
+          // EXCLUDE STABLECOINS - they don't move!
+          const isStablecoin = symbol.includes('USDC') || symbol.includes('DAI_') || 
+                               symbol.includes('BUSD') || symbol.includes('TUSD') ||
+                               symbol.includes('FDUSD') || symbol.includes('GUSD') ||
+                               symbol.includes('USD1') || symbol.includes('PYUSD') ||
+                               symbol.includes('FRAX_') || symbol.includes('USDP');
+          
           const isAccumulation = Math.abs(data.change) < 1.5 && data.volume > 500_000;
           const stablePriceHighVolume = isAccumulation && data.change > 0;
           const tightRange = spread < 0.2;
           
-          if (stablePriceHighVolume && tightRange) {
+          if (stablePriceHighVolume && tightRange && !isStablecoin) {
             const accumEdge = (data.volume / 1_000_000) * 0.15 - spread - feeBuffer;
             if (accumEdge > edge && accumEdge > 0.1) {
               edge = accumEdge;
@@ -1510,6 +1517,88 @@ serve(async (req) => {
             }
           }
           
+          // ===============================================
+          // STRATEGY 16: GRID TRADING - Range oscillation
+          // ===============================================
+          // Grid trading profits from price oscillating within a range
+          // Best for: sideways markets, stablecoins excluded
+          // Logic: Buy at lower grid levels, sell at higher levels
+          
+          const isRanging = Math.abs(data.change) < 3; // Low 24h change = ranging
+          const hasGridVolume = data.volume > 200_000;
+          const hasGridSpread = spread < 0.4;
+          const priceRange = data.high24h - data.low24h;
+          const rangePercent = priceRange > 0 ? (priceRange / data.low24h) * 100 : 0;
+          const isGoodRange = rangePercent > 1 && rangePercent < 10; // 1-10% daily range
+          const notStablecoin = !symbol.includes('USDC') && !symbol.includes('USDT_') && 
+                                !symbol.includes('DAI') && !symbol.includes('BUSD') &&
+                                !symbol.includes('TUSD') && !symbol.includes('FDUSD') &&
+                                !symbol.includes('GUSD') && !symbol.includes('USD1');
+          
+          if (isRanging && hasGridVolume && hasGridSpread && isGoodRange && notStablecoin) {
+            // Calculate grid levels (5 levels across the range)
+            const gridLevels = 5;
+            const gridStep = priceRange / gridLevels;
+            
+            // Find which grid level we're at (0 = bottom, 4 = top)
+            const currentLevel = Math.floor((data.price - data.low24h) / gridStep);
+            
+            // Grid trading edge: higher when price is at lower levels (buy opportunity)
+            // Edge decreases as price goes up (less room to profit)
+            const gridPosition = (data.price - data.low24h) / priceRange; // 0-1
+            const isLowerGrid = gridPosition < 0.4; // In lower 40% of range
+            
+            if (isLowerGrid) {
+              // Calculate edge based on distance from bottom and range size
+              const distanceToTop = 1 - gridPosition;
+              const gridEdge = (distanceToTop * rangePercent * 0.15) - spread - feeBuffer;
+              
+              if (gridEdge > edge && gridEdge > 0.15) {
+                edge = gridEdge;
+                strat = 'GRID';
+                console.log(`📐 GRID: ${symbol} at level ${currentLevel}/${gridLevels} (${(gridPosition*100).toFixed(0)}% of range) range=${rangePercent.toFixed(1)}%`);
+              }
+            }
+          }
+          
+          // ===============================================
+          // STRATEGY 17: GRID_DCA - Grid with DCA entry
+          // ===============================================
+          // More aggressive grid: enter even at mid-levels if trending up
+          const isMidRange = pricePosition > 0.3 && pricePosition < 0.6;
+          const hasUpwardBias = data.change > 0.5 && data.change < 3;
+          const goodGridLiquidity = data.volume > 500_000;
+          
+          if (isMidRange && hasUpwardBias && goodGridLiquidity && hasGridSpread && notStablecoin && isGoodRange) {
+            const midGridEdge = (rangePercent * 0.08) - spread - feeBuffer;
+            
+            if (midGridEdge > edge && midGridEdge > 0.12) {
+              edge = midGridEdge;
+              strat = 'GRIDDCA';
+              console.log(`📊 GRIDDCA: ${symbol} mid-range entry, bias up +${data.change.toFixed(1)}%`);
+            }
+          }
+          
+          // ===============================================
+          // STRATEGY 18: RANGE_BOUNCE - Bounce from range bottom
+          // ===============================================
+          // Price near 24h low but not crashing = bounce opportunity
+          const nearBottom = pricePosition < 0.15; // Within 15% of 24h low
+          const notCrashing = data.change > -5; // Not in freefall
+          const hasBounceVolume = data.volume > 300_000;
+          const tightBounceSpread = spread < 0.3;
+          
+          if (nearBottom && notCrashing && hasBounceVolume && tightBounceSpread && notStablecoin) {
+            const bounceRoom = (1 - pricePosition) * rangePercent;
+            const bounceEdge = (bounceRoom * 0.12) - spread - feeBuffer;
+            
+            if (bounceEdge > edge && bounceEdge > 0.2) {
+              edge = bounceEdge;
+              strat = 'BOUNCE';
+              console.log(`⬆️ BOUNCE: ${symbol} near bottom (${(pricePosition*100).toFixed(0)}%) room to bounce ${bounceRoom.toFixed(1)}%`);
+            }
+          }
+          
           // ===== MINIMUM EDGE THRESHOLD =====
           const MIN_EDGE_THRESHOLD = 0.10; // Lowered for more opportunities with goal pressure
           
@@ -1523,6 +1612,7 @@ serve(async (req) => {
               (strat === 'SCALP' || strat === 'WHALE') ? 1.5 :          // Proven strategies
               (strat === 'BREAKOUT' || strat === 'BURST') ? 1.4 :       // Momentum plays
               (strat === 'VOLSURGE' || strat === 'ACCUM') ? 1.3 :       // Volume signals
+              (strat === 'GRID' || strat === 'GRIDDCA' || strat === 'BOUNCE') ? 1.35 : // Grid strategies
               (strat === 'TREND' || strat === 'CONTINUE') ? 1.2 :       // Trend following
               (strat === 'REVERSION' || strat === 'OVERSOLD') ? 1.1 :   // Contrarian
               1.0;
