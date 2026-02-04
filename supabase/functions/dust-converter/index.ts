@@ -81,16 +81,23 @@ serve(async (req) => {
   }
 
   try {
-    const { action = 'scan', minValueUSDT = 0.01, convertToGT = true } = await req.json().catch(() => ({}));
+    const { action = 'scan', minValueUSDT = 0.01, targetUSDT = 5, convertToGT = true } = await req.json().catch(() => ({}));
     
-    console.log(`[DUST-CONVERTER] 🧹 Action: ${action}, Min Value: $${minValueUSDT}`);
+    console.log(`[DUST-CONVERTER] 🧹 Action: ${action}, Min Value: $${minValueUSDT}, Target: $${targetUSDT}`);
+    
+    interface SellableBalance extends DustBalance {
+      canSell: boolean;
+      minOrderValue: number;
+    }
     
     const results = {
       action,
       timestamp: Date.now(),
       dustBalances: [] as DustBalance[],
+      sellableBalances: [] as SellableBalance[],
       convertibleCurrencies: [] as string[],
       converted: false,
+      liquidatedUSDT: 0,
       gtReceived: 0,
       errors: [] as string[],
     };
@@ -111,16 +118,19 @@ serve(async (req) => {
       throw new Error('Failed to fetch tickers');
     }
 
-    const tickerMap = new Map<string, number>();
+    const tickerMap = new Map<string, { price: number; bid: string }>();
     for (const ticker of tickersResponse.data) {
       if (ticker.currency_pair?.endsWith('_USDT')) {
-        tickerMap.set(ticker.currency_pair.replace('_USDT', ''), parseFloat(ticker.last || '0'));
+        tickerMap.set(ticker.currency_pair.replace('_USDT', ''), {
+          price: parseFloat(ticker.last || '0'),
+          bid: ticker.highest_bid || ticker.last,
+        });
       }
     }
 
-    // Step 3: Identify dust balances (small amounts worth less than threshold)
-    const KEEP_CURRENCIES = ['USDT', 'USD', 'GT']; // Don't convert these
-    const MAX_DUST_VALUE = 3; // Maximum $3 to be considered dust
+    // Step 3: Categorize balances - dust vs sellable
+    const KEEP_CURRENCIES = ['USDT', 'USD', 'GT'];
+    const MIN_TRADE_VALUE = 3; // Gate.io minimum $3 per trade
     
     for (const balance of balancesResponse.data) {
       const available = parseFloat(balance.available || '0');
@@ -128,18 +138,89 @@ serve(async (req) => {
         continue;
       }
 
-      const price = tickerMap.get(balance.currency) || 0;
-      const estimatedValue = available * price;
+      const tickerInfo = tickerMap.get(balance.currency);
+      if (!tickerInfo) continue;
+      
+      const estimatedValue = available * tickerInfo.price;
 
-      // If value is between minValue and maxDust, it's dust
-      if (estimatedValue >= minValueUSDT && estimatedValue <= MAX_DUST_VALUE) {
+      if (estimatedValue >= MIN_TRADE_VALUE) {
+        // This is SELLABLE - above minimum
+        results.sellableBalances.push({
+          currency: balance.currency,
+          available: balance.available,
+          estimatedValue,
+          canSell: true,
+          minOrderValue: MIN_TRADE_VALUE,
+        });
+        console.log(`[DUST-CONVERTER] 💰 SELLABLE: ${balance.currency} = $${estimatedValue.toFixed(2)}`);
+      } else if (estimatedValue >= minValueUSDT) {
+        // This is dust - below minimum
         results.dustBalances.push({
           currency: balance.currency,
           available: balance.available,
           estimatedValue,
         });
-        console.log(`[DUST-CONVERTER] 💨 Found dust: ${balance.currency} = $${estimatedValue.toFixed(4)}`);
+        console.log(`[DUST-CONVERTER] 💨 Dust: ${balance.currency} = $${estimatedValue.toFixed(4)}`);
       }
+    }
+    
+    console.log(`[DUST-CONVERTER] Found ${results.sellableBalances.length} sellable, ${results.dustBalances.length} dust`);
+
+    // Get current USDT balance
+    const usdtBalance = balancesResponse.data.find((b: { currency: string }) => b.currency === 'USDT');
+    const currentUSDT = parseFloat(usdtBalance?.available || '0');
+    console.log(`[DUST-CONVERTER] 💵 Current USDT: $${currentUSDT.toFixed(2)}`);
+    
+    // Step 4: If action is 'force-liquidity', sell largest positions first to reach target
+    if (action === 'force-liquidity' && results.sellableBalances.length > 0) {
+      console.log(`[DUST-CONVERTER] 🔥 FORCE LIQUIDITY MODE - Target: $${targetUSDT}`);
+      
+      // Sort by value descending - sell biggest first
+      results.sellableBalances.sort((a, b) => b.estimatedValue - a.estimatedValue);
+      
+      let neededUSDT = targetUSDT - currentUSDT;
+      let totalLiquidated = 0;
+      
+      for (const asset of results.sellableBalances) {
+        if (neededUSDT <= 0) {
+          console.log(`[DUST-CONVERTER] ✅ Target reached, stopping liquidation`);
+          break;
+        }
+        
+        const pair = `${asset.currency}_USDT`;
+        const tickerInfo = tickerMap.get(asset.currency);
+        
+        if (!tickerInfo) continue;
+        
+        console.log(`[DUST-CONVERTER] 🔄 Selling ${asset.currency} ($${asset.estimatedValue.toFixed(2)})...`);
+        
+        try {
+          const orderResponse = await gateRequest('/spot/orders', 'POST', {}, {
+            currency_pair: pair,
+            side: 'sell',
+            amount: asset.available,
+            price: tickerInfo.bid,
+            type: 'limit',
+            time_in_force: 'ioc',
+          });
+          
+          if (orderResponse.ok && orderResponse.data.id) {
+            const filled = parseFloat(orderResponse.data.filled_total || '0') || asset.estimatedValue * 0.99;
+            totalLiquidated += filled;
+            neededUSDT -= filled;
+            console.log(`[DUST-CONVERTER] ✅ Sold ${asset.currency} for ~$${filled.toFixed(2)}`);
+          } else {
+            results.errors.push(`${asset.currency}: ${orderResponse.data?.message || 'Failed'}`);
+            console.log(`[DUST-CONVERTER] ❌ Failed to sell ${asset.currency}:`, orderResponse.data);
+          }
+        } catch (e) {
+          results.errors.push(`${asset.currency}: ${e}`);
+        }
+        
+        await new Promise(r => setTimeout(r, 250));
+      }
+      
+      results.liquidatedUSDT = totalLiquidated;
     }
 
     console.log(`[DUST-CONVERTER] Found ${results.dustBalances.length} dust balances`);
@@ -257,13 +338,18 @@ serve(async (req) => {
     // Summary
     const summary = {
       success: true,
+      currentUSDT,
+      sellableCount: results.sellableBalances.length,
+      sellableValue: results.sellableBalances.reduce((sum, s) => sum + s.estimatedValue, 0),
       dustFound: results.dustBalances.length,
       totalDustValue: results.dustBalances.reduce((sum, d) => sum + d.estimatedValue, 0),
       convertibleCount: results.convertibleCurrencies.length,
       converted: results.converted,
+      liquidatedUSDT: results.liquidatedUSDT,
       gtReceived: results.gtReceived,
       errors: results.errors,
-      details: results.dustBalances,
+      sellableAssets: results.sellableBalances,
+      dustAssets: results.dustBalances,
     };
 
     console.log('[DUST-CONVERTER] ✅ Complete:', JSON.stringify({
