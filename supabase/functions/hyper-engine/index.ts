@@ -21,10 +21,15 @@ const BASE_CONFIG = {
   reversionMinDrop: -2.5,
   reversionMaxDrop: -35,
   
-  // Position sizing
-  minPositionUsdt: 3,
-  maxPositionUsdt: 15,
-  positionPct: 50,
+  // Position sizing - PRECISE ADAPTIVE SYSTEM
+  // These are base values that get scaled based on actual available capital
+  minPositionUsdt: 3,        // Gate.io absolute minimum
+  maxPositionUsdt: 50,       // Maximum per trade (user preference)
+  basePositionPct: 10,       // Base: 10% of available balance per trade
+  // Dynamic scaling thresholds
+  smallBalanceThreshold: 10, // Below this, use more aggressive sizing
+  mediumBalanceThreshold: 50,
+  largeBalanceThreshold: 200,
   
   // Continuous operation
   burstDurationMs: 55000,
@@ -271,8 +276,8 @@ function calculateDynamicParams(market: MarketState, performance: PerformanceSta
   if (performance.consecutiveWins >= 3) posMultiplier *= 1.2; // Hot streak bonus
   if (performance.consecutiveLosses >= 2) posMultiplier *= 0.7; // Cold streak - reduce size
   
-  const positionPct = Math.max(20, Math.min(70, BASE_CONFIG.positionPct * posMultiplier));
-  const maxPositionUsdt = Math.max(5, Math.min(25, BASE_CONFIG.maxPositionUsdt * posMultiplier));
+  const positionPct = Math.max(20, Math.min(70, BASE_CONFIG.basePositionPct * posMultiplier));
+  const maxPositionUsdt = Math.max(5, Math.min(BASE_CONFIG.maxPositionUsdt, BASE_CONFIG.maxPositionUsdt * posMultiplier));
   
   // Calculate overall aggressiveness score (0-100)
   const aggressiveness = Math.round(
@@ -768,24 +773,62 @@ serve(async (req) => {
         // ===== EXECUTE BEST =====
         const best = opps[0];
         
-        // Calculate position size using DYNAMIC parameters
-        let posSize = Math.min(usdt * (dynamicParams.positionPct / 100), dynamicParams.maxPositionUsdt);
-        posSize = Math.max(posSize, CONFIG.minPositionUsdt);
-        posSize = Math.min(posSize, usdt * 0.95); // Leave 5% buffer
+        // ===== PRECISE POSITION SIZING ALGORITHM =====
+        // Adapts based on available capital with smart scaling
         
-        // Calculate amount - CRITICAL: handle expensive coins
-        const minOrderValueBase = best.min * best.price;
-        const minOrderValue = Math.max(minOrderValueBase, best.minQuote);
+        // Step 1: Calculate base position percentage based on balance tier
+        let effectivePct = dynamicParams.positionPct;
         
-        // Skip if we can't afford minimum order
-        if (minOrderValue > usdt * 0.95) {
-          console.log(`⏭️ [${cycle}] Skip ${best.symbol} - min order $${minOrderValue.toFixed(2)} (minQuote=$${best.minQuote}) > balance $${usdt.toFixed(2)}`);
-          results.push({ t: cycle, s: best.symbol, a: 'expensive' });
-          failedSymbols.add(best.symbol); // Don't try again this session
-          await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
-          continue;
+        if (usdt < BASE_CONFIG.smallBalanceThreshold) {
+          // Small balance ($3-10): Use higher percentage to meet minimums
+          // With $5, using 70% = $3.50 which meets minimum
+          effectivePct = Math.max(60, dynamicParams.positionPct * 1.5);
+          console.log(`📏 Small balance mode: ${effectivePct.toFixed(0)}% of $${usdt.toFixed(2)}`);
+        } else if (usdt < BASE_CONFIG.mediumBalanceThreshold) {
+          // Medium balance ($10-50): Use moderate percentage
+          effectivePct = Math.max(30, dynamicParams.positionPct * 1.2);
+        } else if (usdt > BASE_CONFIG.largeBalanceThreshold) {
+          // Large balance ($200+): Can afford to be more conservative per trade
+          effectivePct = Math.min(15, dynamicParams.positionPct * 0.8);
         }
         
+        // Step 2: Calculate base position size
+        let posSize = usdt * (effectivePct / 100);
+        
+        // Step 3: Apply min/max constraints
+        const absoluteMin = CONFIG.minPositionUsdt; // $3 - Gate.io minimum
+        const absoluteMax = Math.min(dynamicParams.maxPositionUsdt, usdt * 0.95);
+        
+        posSize = Math.max(posSize, absoluteMin);
+        posSize = Math.min(posSize, absoluteMax);
+        
+        // Step 4: Calculate minimum order requirements for this specific pair
+        const minOrderValueBase = best.min * best.price;
+        const minOrderValue = Math.max(minOrderValueBase, best.minQuote, absoluteMin);
+        
+        // Step 5: If our position is smaller than required minimum, scale up or skip
+        if (posSize < minOrderValue) {
+          if (usdt >= minOrderValue * 1.05) {
+            // We can afford it, scale up
+            posSize = minOrderValue * 1.02; // Slightly above minimum
+            console.log(`📐 Scaled up posSize to meet min: $${posSize.toFixed(2)} (min=$${minOrderValue.toFixed(2)})`);
+          } else {
+            // Can't afford this pair's minimum
+            console.log(`⏭️ [${cycle}] Skip ${best.symbol} - min order $${minOrderValue.toFixed(2)} > balance $${usdt.toFixed(2)}`);
+            results.push({ t: cycle, s: best.symbol, a: 'expensive' });
+            failedSymbols.add(best.symbol);
+            await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
+            continue;
+          }
+        }
+        
+        // Step 6: Final safety check - never use more than 95% of balance
+        posSize = Math.min(posSize, usdt * 0.95);
+        
+        // Log the precise calculation
+        console.log(`💎 Position: $${posSize.toFixed(2)} (${(posSize/usdt*100).toFixed(1)}% of $${usdt.toFixed(2)}) | Min: $${minOrderValue.toFixed(2)}`);
+        
+        // ===== CALCULATE AMOUNT =====
         const mult = Math.pow(10, best.prec);
         let amount = posSize / best.price;
         
@@ -802,12 +845,12 @@ serve(async (req) => {
           amount = Math.ceil(best.min * 1.01 * mult) / mult;
         }
         
-        // Final validation - use existing minOrderValue
+        // Final validation
         const orderValue = amount * best.price;
         
-        console.log(`📊 [${cycle}] ${best.symbol}: amt=${amount.toFixed(best.prec)} (prec=${best.prec}) min=${best.min} val=$${orderValue.toFixed(2)} minOrder=$${minOrderValue.toFixed(2)}`);
+        console.log(`📊 [${cycle}] ${best.symbol}: amt=${amount.toFixed(best.prec)} val=$${orderValue.toFixed(2)} | min=${best.min} minOrd=$${minOrderValue.toFixed(2)}`);
         
-        if (orderValue > usdt * 0.98 || orderValue < minOrderValue || amount < best.min) {
+        if (orderValue > usdt * 0.98 || orderValue < minOrderValue * 0.99 || amount < best.min) {
           console.log(`⏭️ [${cycle}] Validation fail: val=$${orderValue.toFixed(2)} bal=$${usdt.toFixed(2)} minOrd=$${minOrderValue.toFixed(2)} amt=${amount.toFixed(best.prec)} min=${best.min}`);
           results.push({ t: cycle, s: best.symbol, a: 'skip', e: best.edge });
           await new Promise(r => setTimeout(r, Math.max(0, CONFIG.cycleIntervalMs - (Date.now() - cycleStart))));
