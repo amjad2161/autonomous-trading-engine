@@ -15,7 +15,7 @@ const MARATHON_GOAL = 100_000; // Target: 100K successful trades!
 
  // ===== ALLOWED STRATEGIES - ONLY PROFITABLE ONES =====
  const ALLOWED_STRATEGIES = new Set([
-   'hyper-scalp',      // Main winner: 54% WR, +118% PnL
+   'hyper-scalp',      // Unified winning strategy: 54% WR, +118% PnL
    'EMERGENCY_LIQUIDATE',
    'FORCE_LIQUIDITY',
    'TP1',
@@ -1358,7 +1358,7 @@ serve(async (req) => {
               const scalpEdge = (spread * 0.4) - feeBuffer + (data.change * 0.05);
               if (scalpEdge > edge && scalpEdge > 0.05) {
                 edge = scalpEdge;
-                strat = 'SCALP';
+               strat = 'hyper-scalp';
               }
             }
           }
@@ -1370,7 +1370,7 @@ serve(async (req) => {
             const pumpEdge = Math.min(data.change * 0.08, 1.5) - spread - feeBuffer;
             if (pumpEdge > edge && pumpEdge > 0.2) {
               edge = pumpEdge;
-              strat = 'PUMP';
+             strat = 'hyper-scalp';
             }
           }
           
@@ -1381,7 +1381,7 @@ serve(async (req) => {
             const arbEdge = (spread * 0.35) - feeBuffer;
             if (arbEdge > edge && arbEdge > 0.15) {
               edge = arbEdge;
-              strat = 'ARB';
+             strat = 'hyper-scalp';
             }
           }
           
@@ -1392,7 +1392,7 @@ serve(async (req) => {
             const trendEdge = (data.change * 0.06) - spread - feeBuffer;
             if (trendEdge > edge && trendEdge > 0.1) {
               edge = trendEdge;
-              strat = 'TREND';
+             strat = 'hyper-scalp';
             }
           }
           
@@ -1412,7 +1412,7 @@ serve(async (req) => {
             const breakoutEdge = (data.change * 0.10) - spread - feeBuffer;
             if (breakoutEdge > edge && breakoutEdge > 0.2) {
               edge = breakoutEdge;
-              strat = 'BREAKOUT';
+             strat = 'hyper-scalp';
               console.log(`🚀 BREAKOUT: ${symbol} near 24h high (+${data.change.toFixed(1)}%) vol=$${(data.volume/1000).toFixed(0)}K`);
             }
           }
@@ -1430,7 +1430,7 @@ serve(async (req) => {
             const volumeEdge = Math.min(data.change * 0.12, 2.0) - spread - feeBuffer;
             if (volumeEdge > edge && volumeEdge > 0.25) {
               edge = volumeEdge;
-              strat = 'VOLSURGE';
+             strat = 'hyper-scalp';
               console.log(`📊 VOLSURGE: ${symbol} vol=$${(data.volume/1000).toFixed(0)}K (+${data.change.toFixed(1)}%)`);
             }
           }
@@ -1455,7 +1455,7 @@ serve(async (req) => {
             const accumEdge = (data.volume / 1_000_000) * 0.15 - spread - feeBuffer;
             if (accumEdge > edge && accumEdge > 0.1) {
               edge = accumEdge;
-              strat = 'ACCUM';
+             strat = 'hyper-scalp';
               console.log(`🐋 ACCUM: ${symbol} flat price (+${data.change.toFixed(1)}%) high vol=$${(data.volume/1000).toFixed(0)}K`);
             }
           }
@@ -1473,7 +1473,7 @@ serve(async (req) => {
             const flipEdge = (spread * 0.8) + (data.change * 0.02) - feeBuffer * 0.5; // Lower fee impact for fast flip
             if (flipEdge > edge && flipEdge > 0.03) {
               edge = flipEdge;
-              strat = 'FLIP';
+             strat = 'hyper-scalp';
               console.log(`⚡ FLIP: ${symbol} ultra-tight spread=${spread.toFixed(3)}% vol=$${(data.volume/1000).toFixed(0)}K`);
             }
           }
@@ -1491,7 +1491,7 @@ serve(async (req) => {
             const whaleEdge = (data.change * 0.08) - spread - feeBuffer;
             if (whaleEdge > edge && whaleEdge > 0.3) {
               edge = whaleEdge;
-              strat = 'WHALE';
+             strat = 'hyper-scalp';
               console.log(`🐳 WHALE: ${symbol} vol=$${(data.volume/1000).toFixed(0)}K (+${data.change.toFixed(1)}%)`);
             }
           }
@@ -1508,7 +1508,7 @@ serve(async (req) => {
             const burstEdge = (data.change * 0.06) - spread - feeBuffer;
             if (burstEdge > edge && burstEdge > 0.25) {
               edge = burstEdge;
-              strat = 'BURST';
+             strat = 'hyper-scalp';
               console.log(`💥 BURST: ${symbol} explosive +${data.change.toFixed(1)}% still room`);
             }
           }
@@ -1530,7 +1530,7 @@ serve(async (req) => {
             
             if (reversionEdge > edge && reversionEdge > 0.3) {
               edge = reversionEdge;
-              strat = 'REVERSION';
+             strat = 'hyper-scalp';
               console.log(`🔄 REVERSION: ${symbol} dropped ${data.change.toFixed(1)}% bounce expected`);
             }
           }
@@ -1547,7 +1547,7 @@ serve(async (req) => {
             
             if (bounceEdge > edge && bounceEdge > 0.5) {
               edge = bounceEdge;
-              strat = 'OVERSOLD';
+             strat = 'hyper-scalp';
               console.log(`📉 OVERSOLD: ${symbol} crashed ${data.change.toFixed(1)}%`);
             }
           }
@@ -1564,7 +1564,7 @@ serve(async (req) => {
             const rangeBreakEdge = (data.change * 0.07) - spread - feeBuffer;
             if (rangeBreakEdge > edge && rangeBreakEdge > 0.15) {
               edge = rangeBreakEdge;
-              strat = 'RANGEBRK';
+             strat = 'hyper-scalp';
               console.log(`📈 RANGEBRK: ${symbol} breaking out +${data.change.toFixed(1)}%`);
             }
           }
@@ -1581,7 +1581,7 @@ serve(async (req) => {
             const microEdge = (spread * 0.5) - feeBuffer * 0.8;
             if (microEdge > 0.02) {
               edge = Math.max(edge, microEdge);
-              if (edge === microEdge) strat = 'MICRO';
+             if (edge === microEdge) strat = 'hyper-scalp';
             }
           }
           
@@ -1597,7 +1597,7 @@ serve(async (req) => {
             const contEdge = (data.change * 0.05) - spread - feeBuffer;
             if (contEdge > edge && contEdge > 0.12) {
               edge = contEdge;
-              strat = 'CONTINUE';
+             strat = 'hyper-scalp';
               console.log(`➡️ CONTINUE: ${symbol} steady climb +${data.change.toFixed(1)}%`);
             }
           }
@@ -1640,7 +1640,7 @@ serve(async (req) => {
               
               if (gridEdge > edge && gridEdge > 0.15) {
                 edge = gridEdge;
-                strat = 'GRID';
+               strat = 'hyper-scalp';
                 console.log(`📐 GRID: ${symbol} at level ${currentLevel}/${gridLevels} (${(gridPosition*100).toFixed(0)}% of range) range=${rangePercent.toFixed(1)}%`);
               }
             }
@@ -1659,7 +1659,7 @@ serve(async (req) => {
             
             if (midGridEdge > edge && midGridEdge > 0.12) {
               edge = midGridEdge;
-              strat = 'GRIDDCA';
+             strat = 'hyper-scalp';
               console.log(`📊 GRIDDCA: ${symbol} mid-range entry, bias up +${data.change.toFixed(1)}%`);
             }
           }
@@ -1679,7 +1679,7 @@ serve(async (req) => {
             
             if (bounceEdge > edge && bounceEdge > 0.2) {
               edge = bounceEdge;
-              strat = 'BOUNCE';
+             strat = 'hyper-scalp';
               console.log(`⬆️ BOUNCE: ${symbol} near bottom (${(pricePosition*100).toFixed(0)}%) room to bounce ${bounceRoom.toFixed(1)}%`);
             }
           }
