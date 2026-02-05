@@ -7,30 +7,25 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface GateCredentials {
-  apiKey: string;
-  apiSecret: string;
-}
-
 interface ExecuteRequest {
-  credentials: GateCredentials;
   opportunityType: 'spread' | 'arbitrage' | 'momentum' | 'breakout' | 'reversion' | 'volume_spike';
   symbol: string;
   side: 'buy' | 'sell';
   amount: string;
   price?: string;
   route?: string[];
-  
-  // Risk parameters
   maxTradeSize: number;
   minEdge: number;
   expectedEdge: number;
-  
-  // Smart execution parameters
   entryPrice: number;
   targetPrice: number;
   stopLoss: number;
-  slippageTolerance?: number; // Default 0.5%
+  slippageTolerance?: number;
+}
+
+interface GateCredentials {
+  apiKey: string;
+  apiSecret: string;
 }
 
 interface TradeResult {
@@ -44,7 +39,42 @@ interface TradeResult {
   executionTime?: number;
 }
 
-// ============ UTILITY FUNCTIONS ============
+// SECURITY: Input validation helpers
+const VALID_OPPORTUNITY_TYPES = ['spread', 'arbitrage', 'momentum', 'breakout', 'reversion', 'volume_spike'];
+const VALID_SIDES = ['buy', 'sell'];
+const SYMBOL_REGEX = /^[A-Z0-9]+\/[A-Z0-9]+$/;
+const AMOUNT_REGEX = /^\d+(\.\d+)?$/;
+
+function validateRequest(request: any): { valid: boolean; error?: string } {
+  if (!request.symbol || typeof request.symbol !== 'string' || !SYMBOL_REGEX.test(request.symbol)) {
+    return { valid: false, error: 'Invalid symbol format' };
+  }
+  if (!request.side || !VALID_SIDES.includes(request.side)) {
+    return { valid: false, error: 'Invalid side - must be buy or sell' };
+  }
+  if (!request.amount || !AMOUNT_REGEX.test(request.amount)) {
+    return { valid: false, error: 'Invalid amount format' };
+  }
+  if (!request.opportunityType || !VALID_OPPORTUNITY_TYPES.includes(request.opportunityType)) {
+    return { valid: false, error: 'Invalid opportunity type' };
+  }
+  if (typeof request.maxTradeSize !== 'number' || request.maxTradeSize <= 0 || request.maxTradeSize > 10000) {
+    return { valid: false, error: 'Invalid maxTradeSize - must be 0-10000' };
+  }
+  if (typeof request.expectedEdge !== 'number' || request.expectedEdge < 0 || request.expectedEdge > 100) {
+    return { valid: false, error: 'Invalid expectedEdge - must be 0-100' };
+  }
+  if (typeof request.entryPrice !== 'number' || request.entryPrice <= 0) {
+    return { valid: false, error: 'Invalid entryPrice' };
+  }
+  if (typeof request.targetPrice !== 'number' || request.targetPrice <= 0) {
+    return { valid: false, error: 'Invalid targetPrice' };
+  }
+  if (typeof request.stopLoss !== 'number' || request.stopLoss <= 0) {
+    return { valid: false, error: 'Invalid stopLoss' };
+  }
+  return { valid: true };
+}
 
 async function sha512Hash(message: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(message);
@@ -68,9 +98,7 @@ async function generateSignature(
 async function getTicker(pair: string): Promise<{ bid: number; ask: number; last: number; volume: number } | null> {
   const response = await fetch(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${pair}`);
   const data = await response.json();
-  
   if (!data || data.length === 0) return null;
-  
   return {
     bid: parseFloat(data[0].highest_bid),
     ask: parseFloat(data[0].lowest_ask),
@@ -82,13 +110,9 @@ async function getTicker(pair: string): Promise<{ bid: number; ask: number; last
 async function getOrderBook(pair: string, limit = 5): Promise<{ asks: [string, string][]; bids: [string, string][] } | null> {
   const response = await fetch(`https://api.gateio.ws/api/v4/spot/order_book?currency_pair=${pair}&limit=${limit}`);
   const data = await response.json();
-  
   if (!data || !data.asks || !data.bids) return null;
-  
   return data;
 }
-
-// ============ SMART ORDER PLACEMENT ============
 
 async function placeSmartOrder(
   credentials: GateCredentials,
@@ -102,58 +126,33 @@ async function placeSmartOrder(
   const baseUrl = 'https://api.gateio.ws';
   const endpoint = '/api/v4/spot/orders';
   
-  // Get current order book to optimize execution
   const orderBook = await getOrderBook(pair);
   const ticker = await getTicker(pair);
   
   if (!orderBook || !ticker) {
-    return {
-      success: false,
-      error: 'Failed to fetch market data',
-      timestamp: Date.now(),
-    };
+    return { success: false, error: 'Failed to fetch market data', timestamp: Date.now() };
   }
 
-  // Calculate optimal price based on order book
   let optimalPrice: number;
   
   if (side === 'buy') {
-    // For buy: price should be at or slightly above best ask for immediate fill
     const bestAsk = parseFloat(orderBook.asks[0][0]);
     const priceWithSlippage = expectedPrice * (1 + slippageTolerance / 100);
-    
-    // Use the lower of: best ask, expected price + slippage
     optimalPrice = Math.min(bestAsk, priceWithSlippage);
-    
-    // Verify slippage is acceptable
     const actualSlippage = ((optimalPrice - expectedPrice) / expectedPrice) * 100;
     if (actualSlippage > slippageTolerance) {
-      return {
-        success: false,
-        error: `Slippage too high: ${actualSlippage.toFixed(3)}% > ${slippageTolerance}%`,
-        timestamp: Date.now(),
-        slippage: actualSlippage,
-      };
+      return { success: false, error: `Slippage too high: ${actualSlippage.toFixed(3)}%`, timestamp: Date.now(), slippage: actualSlippage };
     }
   } else {
-    // For sell: price should be at or slightly below best bid
     const bestBid = parseFloat(orderBook.bids[0][0]);
     const priceWithSlippage = expectedPrice * (1 - slippageTolerance / 100);
-    
     optimalPrice = Math.max(bestBid, priceWithSlippage);
-    
     const actualSlippage = ((expectedPrice - optimalPrice) / expectedPrice) * 100;
     if (actualSlippage > slippageTolerance) {
-      return {
-        success: false,
-        error: `Slippage too high: ${actualSlippage.toFixed(3)}% > ${slippageTolerance}%`,
-        timestamp: Date.now(),
-        slippage: actualSlippage,
-      };
+      return { success: false, error: `Slippage too high: ${actualSlippage.toFixed(3)}%`, timestamp: Date.now(), slippage: actualSlippage };
     }
   }
 
-  // Check liquidity - ensure enough volume at price level
   const tradeAmount = parseFloat(amount);
   let availableLiquidity = 0;
   const levels = side === 'buy' ? orderBook.asks : orderBook.bids;
@@ -162,169 +161,44 @@ async function placeSmartOrder(
     const levelPrice = parseFloat(level[0]);
     const levelAmount = parseFloat(level[1]);
     const levelValue = levelPrice * levelAmount;
-    
-    if (side === 'buy' && levelPrice <= optimalPrice) {
-      availableLiquidity += levelValue;
-    } else if (side === 'sell' && levelPrice >= optimalPrice) {
-      availableLiquidity += levelValue;
-    }
-    
-    if (availableLiquidity >= tradeAmount * 1.5) break; // 50% buffer
+    if (side === 'buy' && levelPrice <= optimalPrice) availableLiquidity += levelValue;
+    else if (side === 'sell' && levelPrice >= optimalPrice) availableLiquidity += levelValue;
+    if (availableLiquidity >= tradeAmount * 1.5) break;
   }
 
   if (availableLiquidity < tradeAmount) {
-    return {
-      success: false,
-      error: `Insufficient liquidity: $${availableLiquidity.toFixed(2)} available vs $${tradeAmount.toFixed(2)} needed`,
-      timestamp: Date.now(),
-    };
+    return { success: false, error: `Insufficient liquidity`, timestamp: Date.now() };
   }
 
-  // Place IOC order for immediate execution
   const priceStr = optimalPrice.toFixed(8);
-  
-  const body = {
-    currency_pair: pair,
-    side,
-    amount,
-    price: priceStr,
-    type: 'limit',
-    time_in_force: 'ioc', // Immediate-or-Cancel
-  };
-  
+  const body = { currency_pair: pair, side, amount, price: priceStr, type: 'limit', time_in_force: 'ioc' };
   const payloadString = JSON.stringify(body);
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = await generateSignature('POST', endpoint, '', payloadString, timestamp, credentials.apiSecret);
 
-  const headers = {
-    'KEY': credentials.apiKey,
-    'SIGN': signature,
-    'Timestamp': timestamp,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  };
-
+  const headers = { 'KEY': credentials.apiKey, 'SIGN': signature, 'Timestamp': timestamp, 'Content-Type': 'application/json', 'Accept': 'application/json' };
   console.log(`[Trade Executor] Placing smart ${side} order: ${amount} ${pair} @ ${priceStr}`);
 
-  const response = await fetch(`${baseUrl}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: payloadString,
-  });
-
+  const response = await fetch(`${baseUrl}${endpoint}`, { method: 'POST', headers, body: payloadString });
   const data = await response.json();
   const executionTime = Date.now() - startTime;
 
   if (!response.ok) {
     console.error(`[Trade Executor] Order failed:`, data);
-    return {
-      success: false,
-      error: data.message || data.label || 'Order placement failed',
-      timestamp: Date.now(),
-      executionTime,
-    };
+    return { success: false, error: data.message || 'Order placement failed', timestamp: Date.now(), executionTime };
   }
 
-  // Calculate actual slippage
   const executedPrice = parseFloat(data.price || priceStr);
-  const slippage = side === 'buy' 
-    ? ((executedPrice - expectedPrice) / expectedPrice) * 100
-    : ((expectedPrice - executedPrice) / expectedPrice) * 100;
-
+  const slippage = side === 'buy' ? ((executedPrice - expectedPrice) / expectedPrice) * 100 : ((expectedPrice - executedPrice) / expectedPrice) * 100;
   console.log(`[Trade Executor] Order executed in ${executionTime}ms, slippage: ${slippage.toFixed(4)}%`);
   
-  return {
-    success: true,
-    orderId: data.id,
-    executedAmount: data.amount || data.filled_total,
-    executedPrice: data.price || priceStr,
-    slippage,
-    timestamp: Date.now(),
-    executionTime,
-  };
+  return { success: true, orderId: data.id, executedAmount: data.amount || data.filled_total, executedPrice: data.price || priceStr, slippage, timestamp: Date.now(), executionTime };
 }
 
-// ============ ARBITRAGE EXECUTION ============
-
-async function executeArbitrage(
-  credentials: GateCredentials,
-  route: string[],
-  startAmount: number,
-  slippageTolerance: number
-): Promise<TradeResult> {
+async function executeArbitrage(credentials: GateCredentials, route: string[], startAmount: number, slippageTolerance: number): Promise<TradeResult> {
   console.log(`[Trade Executor] Executing arbitrage: ${route.join(' → ')}`);
-  
-  // Verify route is still profitable
-  const pairs: { pair: string; side: 'buy' | 'sell' }[] = [];
-  
-  // Build trade pairs from route
-  for (let i = 0; i < route.length - 1; i++) {
-    const from = route[i];
-    const to = route[i + 1];
-    
-    // Try both pair directions
-    const pairNormal = `${to}_${from}`;
-    const pairReverse = `${from}_${to}`;
-    
-    const tickerNormal = await getTicker(pairNormal);
-    const tickerReverse = await getTicker(pairReverse);
-    
-    if (tickerNormal) {
-      pairs.push({ pair: pairNormal, side: 'buy' });
-    } else if (tickerReverse) {
-      pairs.push({ pair: pairReverse, side: 'sell' });
-    } else {
-      return {
-        success: false,
-        error: `No pair found for ${from} → ${to}`,
-        timestamp: Date.now(),
-      };
-    }
-  }
-
-  // Calculate expected final amount
-  let expectedAmount = startAmount;
-  const fees = 0.002; // 0.2% per trade
-  
-  for (const { pair, side } of pairs) {
-    const ticker = await getTicker(pair);
-    if (!ticker) {
-      return {
-        success: false,
-        error: `Failed to get ticker for ${pair}`,
-        timestamp: Date.now(),
-      };
-    }
-    
-    if (side === 'buy') {
-      expectedAmount = (expectedAmount / ticker.ask) * (1 - fees);
-    } else {
-      expectedAmount = expectedAmount * ticker.bid * (1 - fees);
-    }
-  }
-
-  const expectedProfit = ((expectedAmount - startAmount) / startAmount) * 100;
-  
-  if (expectedProfit <= 0) {
-    return {
-      success: false,
-      error: `Arbitrage no longer profitable: ${expectedProfit.toFixed(4)}%`,
-      timestamp: Date.now(),
-    };
-  }
-
-  console.log(`[Trade Executor] Arbitrage expected profit: ${expectedProfit.toFixed(4)}%`);
-  
-  // For safety, don't execute actual arbitrage automatically
-  // This requires atomic execution or careful leg management
-  return {
-    success: false,
-    error: 'Arbitrage auto-execution disabled for safety - manual execution recommended',
-    timestamp: Date.now(),
-  };
+  return { success: false, error: 'Arbitrage auto-execution disabled for safety', timestamp: Date.now() };
 }
-
-// ============ MAIN HANDLER ============
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -332,53 +206,38 @@ serve(async (req) => {
   }
 
   try {
-    const request: ExecuteRequest = await req.json();
-    const { 
-      credentials, 
-      opportunityType, 
-      symbol, 
-      side, 
-      amount,
-      maxTradeSize,
-      minEdge,
-      expectedEdge,
-      entryPrice,
-      targetPrice,
-      stopLoss,
-      route,
-      slippageTolerance = 0.5,
-    } = request;
+    // SECURITY: Require authorization
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) {
+      return new Response(JSON.stringify({ success: false, error: 'Authorization required', timestamp: Date.now() }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
-    // ============ HARD GUARDRAILS ============
+    const request = await req.json();
     
-    // 1. Get credentials - prefer from request, fall back to env vars (server mode)
-    const apiKey = credentials?.apiKey || Deno.env.get('GATE_API_KEY');
-    const apiSecret = credentials?.apiSecret || Deno.env.get('GATE_API_SECRET');
+    // SECURITY: Validate all inputs
+    const validation = validateRequest(request);
+    if (!validation.valid) {
+      return new Response(JSON.stringify({ success: false, error: validation.error, timestamp: Date.now() }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    const { opportunityType, symbol, side, amount, maxTradeSize, minEdge, expectedEdge, entryPrice, targetPrice, stopLoss, route, slippageTolerance = 0.5 } = request as ExecuteRequest;
+
+    // SECURITY: Only use server-side credentials
+    const apiKey = Deno.env.get('GATE_API_KEY');
+    const apiSecret = Deno.env.get('GATE_API_SECRET');
     
     if (!apiKey || !apiSecret) {
       throw new Error('Missing API credentials - please configure GATE_API_KEY and GATE_API_SECRET');
     }
     
-    // Use resolved credentials
     const resolvedCredentials: GateCredentials = { apiKey, apiSecret };
 
-    // 2. Check minimum edge threshold
-    if (expectedEdge < minEdge) {
-      throw new Error(`Edge ${expectedEdge.toFixed(3)}% below minimum threshold ${minEdge}%`);
-    }
+    if (expectedEdge < minEdge) throw new Error(`Edge ${expectedEdge.toFixed(3)}% below minimum threshold ${minEdge}%`);
 
-    // 3. Validate trade size
     const tradeAmount = parseFloat(amount);
-    if (tradeAmount > maxTradeSize) {
-      throw new Error(`Trade size $${tradeAmount.toFixed(2)} exceeds max allowed $${maxTradeSize}`);
-    }
+    if (tradeAmount > maxTradeSize) throw new Error(`Trade size exceeds max allowed`);
+    if (expectedEdge > 5) throw new Error(`Edge suspiciously high - possible stale data`);
 
-    // 4. Sanity check - prevent obviously bad trades
-    if (expectedEdge > 5) {
-      throw new Error(`Edge ${expectedEdge.toFixed(3)}% suspiciously high - possible stale data`);
-    }
-
-    // 5. Validate risk/reward
     const riskPercent = ((entryPrice - stopLoss) / entryPrice) * 100;
     const rewardPercent = ((targetPrice - entryPrice) / entryPrice) * 100;
     const riskRewardRatio = rewardPercent / riskPercent;
@@ -388,70 +247,25 @@ serve(async (req) => {
     }
 
     console.log(`[Trade Executor] Executing ${opportunityType} opportunity: ${symbol}`);
-    console.log(`[Trade Executor] Entry: $${entryPrice} | Target: $${targetPrice} | Stop: $${stopLoss}`);
-    console.log(`[Trade Executor] R/R Ratio: ${riskRewardRatio.toFixed(2)}`);
-
-    // ============ EXECUTE BASED ON TYPE ============
 
     if (opportunityType === 'arbitrage' && route && route.length >= 4) {
       const result = await executeArbitrage(resolvedCredentials, route, tradeAmount, slippageTolerance);
-      return new Response(JSON.stringify({
-        type: 'arbitrage',
-        ...result,
-      }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return new Response(JSON.stringify({ type: 'arbitrage', ...result }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // All other types use smart order placement
     const pair = symbol.replace('/', '_');
-    
-    // Verify opportunity still valid
     const ticker = await getTicker(pair);
-    if (!ticker) {
-      throw new Error(`Could not fetch ticker for ${pair}`);
-    }
+    if (!ticker) throw new Error(`Could not fetch ticker for ${pair}`);
 
-    // Check if price moved too much
     const priceDrift = Math.abs((ticker.last - entryPrice) / entryPrice) * 100;
-    if (priceDrift > slippageTolerance * 2) {
-      throw new Error(`Price drifted ${priceDrift.toFixed(3)}% from expected entry - opportunity stale`);
-    }
+    if (priceDrift > slippageTolerance * 2) throw new Error(`Price drifted too much - opportunity stale`);
 
-    // Execute with smart order placement
-    const result = await placeSmartOrder(
-      resolvedCredentials,
-      pair,
-      side,
-      amount,
-      entryPrice,
-      slippageTolerance
-    );
+    const result = await placeSmartOrder(resolvedCredentials, pair, side, amount, entryPrice, slippageTolerance);
 
-    return new Response(JSON.stringify({
-      type: opportunityType,
-      symbol,
-      ...result,
-      riskRewardRatio,
-      targetPrice,
-      stopLoss,
-    }), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(JSON.stringify({ type: opportunityType, symbol, ...result, riskRewardRatio, targetPrice, stopLoss }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
     console.error('[Trade Executor] Error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: errorMessage,
-      timestamp: Date.now(),
-    }), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(JSON.stringify({ success: false, error: 'Trade execution failed', timestamp: Date.now() }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });

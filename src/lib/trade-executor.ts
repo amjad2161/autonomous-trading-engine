@@ -12,8 +12,6 @@ export interface TradeResult {
   timestamp: number;
 }
 
-// Server mode - credentials are stored on the server
-const USE_SERVER_CREDENTIALS = true;
 
 export async function executeTrade(
   opportunity: Opportunity,
@@ -25,8 +23,7 @@ export async function executeTrade(
   
   const { data, error } = await supabase.functions.invoke('execute-trade', {
     body: {
-      // In server mode, don't send credentials - server will use env vars
-      credentials: USE_SERVER_CREDENTIALS ? undefined : null,
+      // SECURITY: Never send credentials from client - server uses env vars only
       opportunityType: opportunity.type,
       symbol: opportunity.symbol,
       side: 'buy',

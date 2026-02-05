@@ -5,9 +5,7 @@ export interface GateCredentials {
   apiSecret: string;
 }
 
-const STORAGE_KEY = 'gate_credentials';
-
-// Server-side credentials are pre-configured - no need for user input
+// SECURITY: Always use server-side credentials - never store in browser
 const USE_SERVER_CREDENTIALS = true;
 
 export function useCredentials() {
@@ -15,43 +13,23 @@ export function useCredentials() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // If using server credentials, we don't need to load from localStorage
-    if (USE_SERVER_CREDENTIALS) {
-      // Set a placeholder to indicate server mode
-      setCredentialsState({ apiKey: 'SERVER', apiSecret: 'SERVER' });
-      setIsLoading(false);
-      return;
-    }
-
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        setCredentialsState(JSON.parse(stored));
-      } catch {
-        localStorage.removeItem(STORAGE_KEY);
-      }
-    }
+    // SECURITY: Always use server mode - credentials stored in cloud only
+    setCredentialsState({ apiKey: 'SERVER', apiSecret: 'SERVER' });
     setIsLoading(false);
   }, []);
 
-  const setCredentials = useCallback((creds: GateCredentials) => {
-    if (USE_SERVER_CREDENTIALS) return; // No-op in server mode
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(creds));
-    setCredentialsState(creds);
+  const setCredentials = useCallback((_creds: GateCredentials) => {
+    // SECURITY: No-op - credentials should only be set via cloud
+    console.warn('setCredentials is disabled - use cloud settings panel');
   }, []);
 
   const clearCredentials = useCallback(() => {
-    if (USE_SERVER_CREDENTIALS) return; // No-op in server mode
-    localStorage.removeItem(STORAGE_KEY);
-    setCredentialsState(null);
+    // SECURITY: No-op - credentials managed in cloud
+    console.warn('clearCredentials is disabled - use cloud settings panel');
   }, []);
 
-  // In server mode, always consider as having credentials
-  const hasCredentials = USE_SERVER_CREDENTIALS || (
-    credentials !== null && 
-    credentials.apiKey.length > 0 && 
-    credentials.apiSecret.length > 0
-  );
+  // Always true - credentials are managed server-side
+  const hasCredentials = true;
 
   return {
     credentials,
