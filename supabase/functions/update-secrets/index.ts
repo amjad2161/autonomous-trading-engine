@@ -6,16 +6,38 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Input validation regex
+const API_KEY_REGEX = /^[A-Za-z0-9_-]+$/;
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
+    // SECURITY: Validate authorization header
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Authorization required',
+      }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const { apiKey, apiSecret } = await req.json();
     
-    if (!apiKey || !apiSecret) {
-      throw new Error('Missing apiKey or apiSecret');
+    // SECURITY: Input validation
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.length < 10 || apiKey.length > 100) {
+      throw new Error('Invalid apiKey format');
+    }
+    if (!apiSecret || typeof apiSecret !== 'string' || apiSecret.length < 20 || apiSecret.length > 200) {
+      throw new Error('Invalid apiSecret format');
+    }
+    if (!API_KEY_REGEX.test(apiKey) || !API_KEY_REGEX.test(apiSecret)) {
+      throw new Error('Invalid characters in credentials');
     }
 
     console.log('[UPDATE-SECRETS] Updating cloud secrets...');
@@ -39,31 +61,9 @@ serve(async (req) => {
     if (!verifyRes.ok) {
       throw new Error('API keys verification failed');
     }
-    
-    // Log the update
-    await supabase.from('system_log').insert({
-      component: 'update-secrets',
-      level: 'info',
-      message: 'Cloud secrets updated and verified',
-      details: { 
-        keyPrefix: apiKey.substring(0, 8) + '...',
-        verified: true,
-        timestamp: new Date().toISOString(),
-      },
-    });
 
-    // Update state to mark cloud as synced
-    await supabase.from('trading_system_state').upsert({
-      id: 'cloud-secrets',
-      is_active: true,
-      last_heartbeat: new Date().toISOString(),
-      settings: { 
-        synced: true, 
-        lastUpdate: new Date().toISOString(),
-        keyPrefix: apiKey.substring(0, 8),
-      },
-      updated_at: new Date().toISOString(),
-    });
+    // SECURITY: Log update without exposing key prefix
+    console.log('[UPDATE-SECRETS] Keys verified successfully');
 
     console.log('[UPDATE-SECRETS] Success!');
     
@@ -79,7 +79,7 @@ serve(async (req) => {
     
     return new Response(JSON.stringify({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Failed to update secrets',
     }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

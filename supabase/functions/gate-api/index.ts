@@ -7,17 +7,25 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-interface GateCredentials {
-  apiKey: string;
-  apiSecret: string;
-}
-
 interface GateRequest {
   endpoint: string;
   method?: 'GET' | 'POST' | 'DELETE';
   params?: Record<string, string>;
   body?: Record<string, unknown>;
-  credentials?: GateCredentials;
+}
+
+// SECURITY: Whitelist of allowed endpoints
+const ALLOWED_ENDPOINTS = [
+  '/spot/accounts',
+  '/spot/tickers',
+  '/spot/orders',
+  '/spot/order_book',
+  '/spot/currency_pairs',
+  '/wallet/total_balance',
+];
+
+function isAllowedEndpoint(endpoint: string): boolean {
+  return ALLOWED_ENDPOINTS.some(allowed => endpoint.startsWith(allowed));
 }
 
 async function sha512Hash(message: string): Promise<string> {
@@ -53,21 +61,39 @@ serve(async (req) => {
   }
 
   try {
-    const { endpoint, method = 'GET', params = {}, body, credentials } = await req.json() as GateRequest;
-    
-    // Get API credentials - prefer from request, fall back to env vars
-    const GATE_API_KEY = credentials?.apiKey || Deno.env.get('GATE_API_KEY');
-    const GATE_API_SECRET = credentials?.apiSecret || Deno.env.get('GATE_API_SECRET');
+    // SECURITY: Require authorization header
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Authorization required',
+      }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const { endpoint, method = 'GET', params = {}, body } = await req.json() as GateRequest;
+
+    // SECURITY: Validate endpoint
+    if (!endpoint || typeof endpoint !== 'string') {
+      throw new Error('Invalid endpoint');
+    }
+
+    // SECURITY: Check against whitelist
+    if (!isAllowedEndpoint(endpoint)) {
+      throw new Error('Endpoint not allowed');
+    }
+
+    // SECURITY: Only use server-side credentials
+    const GATE_API_KEY = Deno.env.get('GATE_API_KEY');
+    const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET');
 
     if (!GATE_API_KEY) {
-      throw new Error('API Key is required. Please provide your Gate.io API Key.');
+      throw new Error('Server API Key not configured');
     }
     if (!GATE_API_SECRET) {
-      throw new Error('API Secret is required. Please provide your Gate.io API Secret.');
-    }
-
-    if (!endpoint) {
-      throw new Error('Endpoint is required');
+      throw new Error('Server API Secret not configured');
     }
 
     const baseUrl = 'https://api.gateio.ws';
@@ -126,7 +152,10 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('[Gate API] Error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    // SECURITY: Don't expose internal error details
+    const errorMessage = error instanceof Error && error.message.includes('not') 
+      ? error.message 
+      : 'Request failed';
     
     return new Response(JSON.stringify({ 
       success: false, 

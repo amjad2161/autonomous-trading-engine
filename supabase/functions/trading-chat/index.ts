@@ -15,6 +15,46 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY')!;
 const AI_GATEWAY = 'https://ai.gateway.lovable.dev/v1/chat/completions';
 
+// SECURITY: Input validation
+const MAX_MESSAGE_LENGTH = 5000;
+const MAX_MESSAGES = 50;
+const VALID_ROLES = ['user', 'assistant', 'system'];
+
+interface ChatMessage {
+  role: string;
+  content: string;
+}
+
+function validateMessages(messages: any): { valid: boolean; error?: string; sanitized?: ChatMessage[] } {
+  if (!Array.isArray(messages)) {
+    return { valid: false, error: 'Messages must be an array' };
+  }
+  if (messages.length === 0) {
+    return { valid: false, error: 'Messages cannot be empty' };
+  }
+  if (messages.length > MAX_MESSAGES) {
+    return { valid: false, error: `Too many messages (max ${MAX_MESSAGES})` };
+  }
+  
+  const sanitized: ChatMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== 'object') {
+      return { valid: false, error: 'Invalid message format' };
+    }
+    if (!VALID_ROLES.includes(msg.role)) {
+      return { valid: false, error: 'Invalid message role' };
+    }
+    if (typeof msg.content !== 'string') {
+      return { valid: false, error: 'Message content must be a string' };
+    }
+    // Truncate overly long messages
+    const content = msg.content.slice(0, MAX_MESSAGE_LENGTH);
+    sanitized.push({ role: msg.role, content });
+  }
+  
+  return { valid: true, sanitized };
+}
+
 // ===================== GATE.IO API =====================
 async function sha512Hash(message: string): Promise<string> {
   const msgBuffer = new TextEncoder().encode(message);
@@ -207,8 +247,34 @@ serve(async (req) => {
   }
 
   try {
-    const { messages } = await req.json();
+    // SECURITY: Require authorization
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Authorization required',
+      }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const body = await req.json();
     
+    // SECURITY: Validate messages
+    const validation = validateMessages(body.messages);
+    if (!validation.valid) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: validation.error,
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const messages = validation.sanitized!;
+
     // Check if user message contains a direct command
     const userMessage = messages[messages.length - 1]?.content || '';
     const directCommand = await executeCommand(userMessage);
@@ -226,7 +292,7 @@ serve(async (req) => {
     console.error('Chat error:', error);
     return new Response(JSON.stringify({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Chat request failed',
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

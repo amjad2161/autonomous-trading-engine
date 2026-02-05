@@ -23,18 +23,14 @@ export interface ScanResult {
   error?: string;
 }
 
-// Server mode - credentials are stored on the server
-const USE_SERVER_CREDENTIALS = true;
 
 export async function scanOpportunities(
   minSpread = 0.15,
   minVolume = 50000
 ): Promise<ScanResult> {
-  // In server mode, don't send credentials - server will use env vars
-  const credentials = USE_SERVER_CREDENTIALS ? undefined : null;
-  
+  // SECURITY: Never send credentials from client - server uses env vars only
   const { data, error } = await supabase.functions.invoke('opportunity-scanner', {
-    body: { credentials, minSpread, minVolume }
+    body: { minSpread, minVolume }
   });
 
   if (error) {
