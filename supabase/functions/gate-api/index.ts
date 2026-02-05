@@ -152,14 +152,10 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('[Gate API] Error:', error);
-    // SECURITY: Don't expose internal error details
-    const errorMessage = error instanceof Error && error.message.includes('not') 
-      ? error.message 
-      : 'Request failed';
-    
+    // SECURITY: Return fully generic error message - log details server-side only
     return new Response(JSON.stringify({ 
       success: false, 
-      error: errorMessage 
+      error: 'API request failed' 
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
