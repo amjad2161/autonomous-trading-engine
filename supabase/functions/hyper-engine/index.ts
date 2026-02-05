@@ -7,14 +7,21 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// ===== MARATHON MODE: 100K SUCCESSFUL TRADES =====
-// Phase 1: Ultra-fast micro-profits (0-25K trades)
-// Phase 2: Fast small-profits (25K-50K trades)  
-// Phase 3: Medium speed, medium profit (50K-75K trades)
-// Phase 4: Slower, higher profit trades (75K-100K trades)
+ // ===== HYPER-SCALP ONLY MODE =====
+ // Single profitable strategy with high edge threshold
+ // Focus on quality over quantity - 1% minimum edge
 
 const MARATHON_GOAL = 100_000; // Target: 100K successful trades!
 
+ // ===== ALLOWED STRATEGIES - ONLY PROFITABLE ONES =====
+ const ALLOWED_STRATEGIES = new Set([
+   'hyper-scalp',      // Main winner: 54% WR, +118% PnL
+   'EMERGENCY_LIQUIDATE',
+   'FORCE_LIQUIDITY',
+   'TP1',
+   'momentum_exit',
+ ]);
+ 
 // Adaptive config based on marathon progress
 function getMarathonConfig(successfulTrades: number) {
   const progress = successfulTrades / MARATHON_GOAL; // 0 to 1
@@ -25,9 +32,9 @@ function getMarathonConfig(successfulTrades: number) {
   // Cycle interval: starts at 300ms, ends at 2000ms
   const cycleIntervalMs = Math.round(300 + (progress * 1700));
   
-  // Min edge: CRITICAL - must be high enough to cover fees!
-  // 0.5% minimum (0.2% fee each way = 0.4% + profit margin)
-  const baseMinEdge = 0.50 + (progress * 0.30); // Start at 0.5%, end at 0.8%
+   // Min edge: 1% minimum for quality trades
+   // Higher threshold = fewer but more profitable trades
+   const baseMinEdge = 1.00 + (progress * 0.50); // Start at 1.0%, end at 1.5%
   
   // Wait time between buy/sell: starts at 50ms, ends at 500ms
   const tradeWaitMs = Math.round(50 + (progress * 450));
@@ -49,7 +56,7 @@ function getMarathonConfig(successfulTrades: number) {
 
 const BASE_CONFIG = {
   // These get overridden by marathon config
-  baseMinEdge: 0.50,          // Minimum 0.5% edge - covers 0.4% roundtrip fees + margin!
+   baseMinEdge: 1.00,          // Minimum 1.0% edge - quality over quantity!
   baseMinVolume: 5_000,       // Ultra-low volume - more pairs!
   baseMaxSpread: 2.0,         // Accept any spread
   
@@ -91,9 +98,9 @@ const BASE_CONFIG = {
   recentTradesToCheck: 0,
   
   // Quick protection
-  baseStopLoss: 3.0,
-  baseTakeProfit: 0.3,        // Take tiny profits fast!
-  trailingStopPct: 0.2,
+   baseStopLoss: 2.0,          // Tighter stop loss
+   baseTakeProfit: 0.5,        // Take profits at 0.5%+
+   trailingStopPct: 0.3,       // Trailing stop at 0.3%
   useExchangeOrders: false,
 };
 
@@ -1678,9 +1685,9 @@ serve(async (req) => {
           }
           
           // ===== CRITICAL: HIGH EDGE THRESHOLD =====
-          // 0.5% MINIMUM to cover fees (0.2% each way = 0.4%) + profit margin
-          // This prevents fee-losing trades!
-          const MIN_EDGE_THRESHOLD = 0.50;
+           // 1.0% MINIMUM for quality trades only
+           // This ensures significant profit margin after fees
+           const MIN_EDGE_THRESHOLD = 1.00;
           
           if (edge >= MIN_EDGE_THRESHOLD) {
             // ===== BLOCK LOSING STRATEGIES =====
@@ -1688,6 +1695,12 @@ serve(async (req) => {
             if (blockedStrategies.has(strat)) {
               continue; // Strategy is blocked due to low Win Rate
             }
+             
+             // ===== ONLY ALLOW PROFITABLE STRATEGIES =====
+             // Skip if strategy is not in our allowed list
+             if (!ALLOWED_STRATEGIES.has(strat)) {
+               continue; // Strategy not in whitelist
+             }
             
             const volumeFactor = Math.log10(Math.max(data.volume, 100000) / 100000);
             const score = edge * (1 + volumeFactor) / (spread + 0.05);
@@ -1743,6 +1756,22 @@ serve(async (req) => {
         // ===== PRECISE POSITION SIZING ALGORITHM =====
         // Adapts based on available capital with smart scaling
         
+         // ===== KELLY AGGRESSIVE MODE =====
+         // After 3+ consecutive wins, increase position size significantly
+         const consecutiveWins = performanceState.consecutiveWins;
+         let kellyMultiplier = 1.0;
+         
+         if (consecutiveWins >= 5) {
+           kellyMultiplier = 1.8; // +80% size after 5 wins
+           console.log(`🔥 HOT STREAK: ${consecutiveWins} wins | Kelly 1.8x`);
+         } else if (consecutiveWins >= 3) {
+           kellyMultiplier = 1.4; // +40% size after 3 wins
+           console.log(`🌟 WINNING STREAK: ${consecutiveWins} wins | Kelly 1.4x`);
+         } else if (performanceState.consecutiveLosses >= 3) {
+           kellyMultiplier = 0.6; // -40% size after 3 losses
+           console.log(`❄️ COLD STREAK: ${performanceState.consecutiveLosses} losses | Kelly 0.6x`);
+         }
+         
         // Step 1: Calculate base position percentage based on balance tier
         let effectivePct = dynamicParams.positionPct;
         
@@ -1759,6 +1788,9 @@ serve(async (req) => {
           effectivePct = Math.min(15, dynamicParams.positionPct * 0.8);
         }
         
+         // Apply Kelly multiplier for hot/cold streaks
+         effectivePct = effectivePct * kellyMultiplier;
+         
         // Step 2: Calculate base position size
         let posSize = usdt * (effectivePct / 100);
         
@@ -1878,17 +1910,55 @@ serve(async (req) => {
           const waitTime = Math.max(baseWait, marathonWait);
           await new Promise(r => setTimeout(r, waitTime));
           
-          // Get fresh price before selling
+           // ===== SMART EXIT: TRAILING STOP + MOMENTUM REVERSAL =====
+           // Get fresh price and check for momentum reversal
           const freshTickers = await getTickers();
           const freshTicker = freshTickers.get(best.symbol);
           const currentBid = freshTicker?.bid || bidPrice;
+           const currentChange = freshTicker?.change || 0;
+           
+           // Calculate price movement since buy
+           const priceMovement = ((currentBid - buyPrice) / buyPrice) * 100;
+           
+           // ===== TRAILING STOP LOGIC =====
+           // If price moved up significantly, use trailing stop
+           const trailingStopPct = BASE_CONFIG.trailingStopPct;
+           let exitReason = 'normal';
+           let useSmartExit = false;
+           
+           // Check for momentum reversal (was positive, now negative)
+           if (priceMovement > 0.3 && currentChange < 0) {
+             useSmartExit = true;
+             exitReason = 'momentum_reversal';
+             console.log(`🔄 MOMENTUM REVERSAL: ${best.symbol} was +${priceMovement.toFixed(2)}% now change=${currentChange.toFixed(2)}%`);
+           }
+           
+           // Check trailing stop (price dropped from peak)
+           if (priceMovement < -trailingStopPct && priceMovement > -BASE_CONFIG.baseStopLoss) {
+             useSmartExit = true;
+             exitReason = 'trailing_stop';
+             console.log(`📉 TRAILING STOP: ${best.symbol} dropped ${priceMovement.toFixed(2)}%`);
+           }
+           
+           // Immediate stop loss
+           if (priceMovement < -BASE_CONFIG.baseStopLoss) {
+             useSmartExit = true;
+             exitReason = 'stop_loss';
+             console.log(`🛑 STOP LOSS: ${best.symbol} crashed ${priceMovement.toFixed(2)}%`);
+           }
+           
+           // Take profit
+           if (priceMovement > BASE_CONFIG.baseTakeProfit) {
+             useSmartExit = true;
+             exitReason = 'take_profit';
+             console.log(`🎯 TAKE PROFIT: ${best.symbol} up ${priceMovement.toFixed(2)}%`);
+           }
           
           // ===== STEP 3: SMART SELL =====
           const sellAmt = (buyFilledAmount * 0.999).toFixed(best.prec);
           
-          // Only sell if price moved up, otherwise use market to exit
-          const priceChange = ((currentBid - buyPrice) / buyPrice) * 100;
-          const useLimit = priceChange > 0.05; // Use limit if price up >0.05%
+           // Use market order for fast exit on stop/reversal, limit for TP
+           const useLimit = exitReason === 'take_profit' && priceMovement > 0.2;
           
           const sellOrder = await gate('POST', '/spot/orders', key, secret, {
             currency_pair: best.symbol, 
