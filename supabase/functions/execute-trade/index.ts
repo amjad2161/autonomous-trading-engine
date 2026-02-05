@@ -266,6 +266,7 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('[Trade Executor] Error:', error);
-    return new Response(JSON.stringify({ success: false, error: 'Trade execution failed', timestamp: Date.now() }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    // SECURITY: Return generic error with correct 500 status code
+    return new Response(JSON.stringify({ success: false, error: 'Trade execution failed', timestamp: Date.now() }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 });
