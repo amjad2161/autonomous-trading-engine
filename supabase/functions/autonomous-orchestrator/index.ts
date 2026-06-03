@@ -4,6 +4,8 @@ import { resolveConfig, type MarketRegime } from "../_shared/profiles.ts";
 import { evaluateInvariants, invariantReason } from "../_shared/invariants.ts";
 import { riskPosture, postureBlocksEntries } from "../_shared/health.ts";
 import { computeKpis, alertDecisions } from "../_shared/metrics.ts";
+import { normalizeAmount, normalizePrice } from "../_shared/market-data.ts";
+import { fetchSpotPairRules, meetsMinimums, type SpotPair } from "../_shared/gate-rules.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -666,6 +668,21 @@ function generateClientOrderId(): string {
   return `t-lov_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 }
 
+// Per-symbol trading rules (precision/minimums) cached from Gate.io, refreshed
+// hourly. Prevents orders being rejected on amount/price format or below-minimum.
+let __symbolRules: Record<string, SpotPair> | null = null;
+let __symbolRulesAt = 0;
+async function getSymbolRules(): Promise<Record<string, SpotPair>> {
+  if (__symbolRules && Date.now() - __symbolRulesAt < 3_600_000) return __symbolRules;
+  try {
+    __symbolRules = await fetchSpotPairRules();
+    __symbolRulesAt = Date.now();
+  } catch (_e) {
+    __symbolRules = __symbolRules ?? {};
+  }
+  return __symbolRules;
+}
+
 async function executeLimitOrder(
   pair: string,
   side: 'buy' | 'sell',
@@ -678,11 +695,29 @@ async function executeLimitOrder(
     // Maker-first entries (spec #57): opt-in via MAKER_FIRST_ENTRIES=1 -> post-only
     // (poc) for lower fees; may not fill. Default stays IOC (behaviour unchanged).
     const tif = (side === 'buy' && Deno.env.get('MAKER_FIRST_ENTRIES') === '1') ? 'poc' : 'ioc';
+
+    // Per-symbol precision + minimum check (spec #21/#45). Falls back to fixed
+    // formatting if exchange rules are unavailable. Avoids order rejections.
+    let amountStr = amount.toFixed(6);
+    let priceStr = price.toFixed(8);
+    try {
+      const r = (await getSymbolRules())[pair];
+      if (r) {
+        const nAmt = normalizeAmount(amount, r.amountPrecision);
+        const nPrice = normalizePrice(price, r.pricePrecision);
+        if (!meetsMinimums(nAmt * nPrice, nAmt, r)) {
+          return { success: false, error: `below exchange minimum for ${pair}` };
+        }
+        amountStr = String(nAmt);
+        priceStr = String(nPrice);
+      }
+    } catch (_e) { /* fall back to fixed format */ }
+
     const order = await gateRequest('/spot/orders', 'POST', {}, {
       currency_pair: pair,
       side,
-      amount: amount.toFixed(6),
-      price: price.toFixed(8),
+      amount: amountStr,
+      price: priceStr,
       type: 'limit',
       time_in_force: tif,
       text: clientOrderId,
