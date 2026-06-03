@@ -21,12 +21,19 @@ Deno.test("skillScore: better-than-ref > 0, equal = 0", () => {
   assertEquals(skillScore(0.25, 0.25), 0);
 });
 
-Deno.test("edgeVerdict: detects edge when model beats market, none when equal", () => {
+Deno.test("edgeVerdict: skill logic — edge vs market, none when equal (min-sample relaxed)", () => {
   const outcomes = [1, 1, 0, 0];
   const market = [0.5, 0.5, 0.5, 0.5];
   const sharp = [0.9, 0.9, 0.1, 0.1];
-  assert(edgeVerdict(sharp, market, outcomes).hasEdge);
-  assert(!edgeVerdict(market, market, outcomes).hasEdge); // identical -> skill 0
+  assert(edgeVerdict(sharp, market, outcomes, 0.01, 1).hasEdge);
+  assert(!edgeVerdict(market, market, outcomes, 0.01, 1).hasEdge); // identical -> skill 0
+});
+
+Deno.test("edgeVerdict: refuses a verdict on too-few samples (anti-luck gate)", () => {
+  // 4 lucky samples must NOT open the live gate at the default 30-sample minimum
+  const v = edgeVerdict([0.9, 0.9, 0.1, 0.1], [0.5, 0.5, 0.5, 0.5], [1, 1, 0, 0]);
+  assert(!v.hasEdge);
+  assert(v.reason.includes("insufficient"));
 });
 
 Deno.test("calibration returns the requested number of bins", () => {

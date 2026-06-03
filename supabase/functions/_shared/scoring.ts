@@ -57,7 +57,8 @@ export interface SizingInputs {
  * Never negative. Risk-budget term guards against oversizing on tight stops.
  */
 export function positionSizeUsdt(s: SizingInputs): number {
-  const byRisk = s.stopDistanceFrac > 0 ? s.riskUsdt / s.stopDistanceFrac : Infinity;
+  // No valid stop distance => we cannot bound risk => size 0 (fail-safe), never unbounded.
+  const byRisk = s.stopDistanceFrac > 0 ? s.riskUsdt / s.stopDistanceFrac : 0;
   const size = Math.min(
     byRisk,
     Math.max(0, s.liquiditySafeUsdt),

@@ -173,8 +173,9 @@ export function selectPersonality(inp: PersonalityInputs): Personality {
   const from = order.indexOf(inp.previous);
   const to = order.indexOf(target);
   if (from === to) return inp.previous;
-  // step exactly one level toward the target (hysteresis)
-  return order[from + (to > from ? 1 : -1)];
+  // De-risk IMMEDIATELY (toxic/broken conditions must not linger); only damp the
+  // move toward MORE aggression, one level at a time. order = safe..aggressive.
+  return to < from ? target : order[from + 1];
 }
 
 // ---------- A1.1: capital routing -------------------------------------------

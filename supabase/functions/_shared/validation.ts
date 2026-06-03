@@ -142,10 +142,21 @@ export interface EdgeVerdict {
  * The LIVE gate: declares an edge ONLY if the model beats the market reference
  * by at least `minSkill` (default tiny, deliberately strict-but-fair).
  */
-export function edgeVerdict(preds: number[], marketPreds: number[], outcomes: number[], minSkill = 0.01): EdgeVerdict {
+export function edgeVerdict(preds: number[], marketPreds: number[], outcomes: number[], minSkill = 0.01, minSamples = 30): EdgeVerdict {
+  const n = Math.min(preds.length, marketPreds.length, outcomes.length);
   const modelBrier = brierScore(preds, outcomes);
   const marketBrier = brierScore(marketPreds, outcomes);
   const skill = skillScore(modelBrier, marketBrier);
+  // A few lucky samples must NOT open the live gate — require a minimum sample.
+  if (n < minSamples) {
+    return {
+      hasEdge: false,
+      skill: Number.isFinite(skill) ? skill : 0,
+      modelBrier,
+      marketBrier,
+      reason: `insufficient samples (${n} < ${minSamples}) — no verdict`,
+    };
+  }
   const hasEdge = skill >= minSkill;
   return {
     hasEdge,

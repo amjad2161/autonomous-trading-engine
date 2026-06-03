@@ -44,7 +44,10 @@ Deno.test("md: quality score + normalization + leveraged filter", () => {
   assertEquals(normalizePrice(100.12345, 2), 100.12);
   assert(isLeveragedToken("BTC3L_USDT"));
   assert(isLeveragedToken("BTCUP_USDT"));
+  assert(isLeveragedToken("ETH5S_USDT"));
   assert(!isLeveragedToken("BTC_USDT"));
+  assert(!isLeveragedToken("JUP_USDT"));  // Jupiter — ends in "UP" but NOT leveraged
+  assert(!isLeveragedToken("DOWN_USDT")); // a coin literally named DOWN is not a leveraged token
 });
 
 Deno.test("md: liquidation value walks the bids (not last price)", () => {

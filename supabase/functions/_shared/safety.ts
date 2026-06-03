@@ -224,6 +224,7 @@ export interface SyntheticGateOrder {
   amount: string;
   price: string;
   filled_total: string;
+  filled_amount: string;
   fill_price: string;
   left: string;
   fee: string;
@@ -272,6 +273,7 @@ export function guardSpotOrder(
     amount: String(amount || 0),
     price: String(price || 0),
     filled_total: String(notionalUsdt || 0),
+    filled_amount: String(amount || 0),
     fill_price: String(price || 0),
     left: "0",
     fee: "0",

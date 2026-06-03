@@ -22,7 +22,7 @@ export function midPrice(bid: number, ask: number): number {
 
 /** Spread in basis points. Returns Infinity if inputs are invalid/crossed. */
 export function spreadBps(bid: number, ask: number): number {
-  if (!(bid > 0) || !(ask > 0) || ask < bid) return Infinity;
+  if (!(bid > 0) || !(ask > 0) || ask <= bid) return Infinity; // <= : a locked book (bid==ask) is not "zero spread", it's untradeable
   return ((ask - bid) / midPrice(bid, ask)) * 10000;
 }
 
@@ -114,7 +114,11 @@ export function normalizePrice(price: number, precision: number): number {
 
 /** Leveraged tokens (3L/5L/UP/DOWN) — filtered out; spot/no-leverage only. */
 export function isLeveragedToken(symbol: string): boolean {
-  return /(?:[35][LS])(?:_|$)/.test(symbol) || /(?:UP|DOWN)(?:_|$)/.test(symbol);
+  const base = symbol.split("_")[0];
+  // Gate leveraged ETFs: <COIN>3L/3S/5L/5S ; UP/DOWN tokens: <COIN>UP/DOWN.
+  // Require a real coin prefix so legit names ENDING in UP (e.g. JUP) or DOWN
+  // are not misclassified. JUP -> not leveraged; BTCUP -> leveraged.
+  return /[A-Z0-9]{2,}[35][LS]$/.test(base) || /[A-Z0-9]{3,}(?:UP|DOWN)$/.test(base);
 }
 
 function clamp01(x: number): number {

@@ -181,7 +181,8 @@ export function adaptiveParams(m: MarketRegime): { params: ProfileParams; ration
   }
 
   // Thin balance -> force conservative absolute sizing.
-  if (m.balanceUsdt > 0 && m.balanceUsdt < 300) {
+  // Treat a zero/unknown balance as thin too (conservative is the safe default).
+  if (m.balanceUsdt < 300) {
     base.maxTradeUsdt = Math.min(base.maxTradeUsdt, PROFILES.CONSERVATIVE.maxTradeUsdt);
     base.maxOpenPositions = Math.min(base.maxOpenPositions, 2);
     notes.push(`thin balance $${m.balanceUsdt.toFixed(0)} → conservative sizing`);

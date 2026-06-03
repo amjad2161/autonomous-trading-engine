@@ -57,7 +57,8 @@ export function kellyRiskUsdt(equityUsdt: number, winProb: number, winLossRatio:
 export function riskOfRuin(winProb: number, riskFraction: number): number {
   const p = clamp01(winProb);
   if (p <= 0.5) return 1;
-  if (!(riskFraction > 0)) return 0;
+  if (!Number.isFinite(riskFraction)) return 1; // unknown/garbage risk -> fail-safe
+  if (riskFraction <= 0) return 0;               // genuinely risking nothing -> no ruin
   const units = Math.max(1, Math.floor(1 / Math.min(1, riskFraction)));
   return Math.pow((1 - p) / p, units);
 }

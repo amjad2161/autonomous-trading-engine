@@ -85,9 +85,15 @@ Deno.test("toxicityScore: vanishing walls + no replenish = toxic", () => {
 
 // ---------- Personality (hysteresis) ----------
 
-Deno.test("personality: steps only ONE level (no flicker)", () => {
-  // toxic conditions target MAKER_ONLY, but from AGGRESSIVE we step one level
+Deno.test("personality: de-risks IMMEDIATELY under toxicity (no damping toward safety)", () => {
+  // toxic conditions target MAKER_ONLY — from AGGRESSIVE we jump straight there
   const next = selectPersonality({ toxicity: 0.9, executionHealth: 0.8, previous: "AGGRESSIVE" });
+  assertEquals(next, "MAKER_ONLY");
+});
+
+Deno.test("personality: risk-UP is damped one step at a time (anti-flicker)", () => {
+  // calm + healthy targets AGGRESSIVE — from CONSERVATIVE we step up only one level
+  const next = selectPersonality({ toxicity: 0.1, executionHealth: 0.8, previous: "CONSERVATIVE" });
   assertEquals(next, "MAKER_HEAVY");
 });
 

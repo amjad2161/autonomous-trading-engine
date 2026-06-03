@@ -49,12 +49,13 @@ export function computeKpis(trades: TradeRow[]): Kpis {
     if (t.filled !== false) filledCount++;
     if (t.slippagePct !== undefined) { slipSum += t.slippagePct; slipN++; }
   }
-  const dd = maxDrawdown(cum);
-  // Reference scale for % drawdown, computed without spreading a large array
-  // (Math.max(...bigArray) can blow the call stack / arg limit).
-  let peak = 1;
-  for (const c of cum) { const a = Math.abs(c); if (a > peak) peak = a; }
-  if (Math.abs(total) > peak) peak = Math.abs(total);
+  const dd = maxDrawdown(cum); // absolute drawdown of the cumulative-P&L curve
+  // % drawdown is measured against the highest PROFIT peak the curve reached.
+  // If it never went positive, a percentage is undefined -> report 0 (the
+  // absolute dd still exists); avoids the old peak=1 floor reporting a spurious
+  // 100% on tiny series. Single pass, no Math.max(...bigArray).
+  let peakPos = 0;
+  for (const c of cum) { if (c > peakPos) peakPos = c; }
   return {
     count,
     wins,
@@ -65,7 +66,7 @@ export function computeKpis(trades: TradeRow[]): Kpis {
     profitFactor: gl > 0 ? round2(gp / gl) : (gp > 0 ? Infinity : 0),
     fillRatePct: count ? (filledCount / count) * 100 : 0,
     avgSlippagePct: slipN ? round4(slipSum / slipN) : 0,
-    maxDrawdownPct: round2((dd / peak) * 100),
+    maxDrawdownPct: peakPos > 0 ? round2((dd / peakPos) * 100) : 0,
   };
 }
 

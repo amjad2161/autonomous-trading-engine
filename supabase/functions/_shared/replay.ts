@@ -47,10 +47,12 @@ export function reduceEvent(state: ReplayState, e: ReplayEvent): ReplayState {
     const newAvg = newQty > 0 ? (pos.qty * pos.avgPrice + e.qty * e.price) / newQty : 0;
     positions[e.symbol] = { qty: round8(newQty), avgPrice: round8(newAvg) };
   } else {
-    const qtySold = Math.min(e.qty, pos.qty);
-    cash += e.qty * e.price - fee;
+    // Only sell what is actually held — never credit cash for phantom units or
+    // drive the position negative on an oversell.
+    const qtySold = Math.min(e.qty, Math.max(0, pos.qty));
+    cash += qtySold * e.price - fee;
     realized += (e.price - pos.avgPrice) * qtySold - fee;
-    const newQty = pos.qty - e.qty;
+    const newQty = pos.qty - qtySold;
     positions[e.symbol] = { qty: round8(newQty), avgPrice: newQty <= 0 ? 0 : pos.avgPrice };
   }
 
