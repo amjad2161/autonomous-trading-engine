@@ -6,6 +6,7 @@ import { riskPosture, postureBlocksEntries } from "../_shared/health.ts";
 import { computeKpis, alertDecisions } from "../_shared/metrics.ts";
 import { normalizeAmount, normalizePrice } from "../_shared/market-data.ts";
 import { fetchSpotPairRules, meetsMinimums, type SpotPair } from "../_shared/gate-rules.ts";
+import { prioritizeBy, type ActionKind } from "../_shared/execution.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1092,8 +1093,16 @@ async function runEliteCycle(): Promise<{
     };
   }
   
-  // EXITS
-  const exitActions = determineExits(state.positions, marketMap);
+  // EXITS — ordered worst-first (panic/stop before take-profit) via the shared
+  // priority queue, so protective exits always execute ahead of profit-taking.
+  const exitActions = prioritizeBy(
+    determineExits(state.positions, marketMap),
+    (e) => {
+      const r = String((e as { reason?: string }).reason || '').toUpperCase();
+      return (r.includes('PANIC') ? 'PANIC' : r.includes('STOP') ? 'STOP_LOSS' : 'TAKE_PROFIT') as ActionKind;
+    },
+    (e) => Math.abs((e as { pnlPercent?: number }).pnlPercent || 0),
+  );
   let totalExitPnL = 0;
   let exitCount = 0;
   

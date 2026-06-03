@@ -11,7 +11,7 @@ import {
   profitLockAmount, rebalancePlan, type Holding,
 } from "./treasury.ts";
 import {
-  adaptiveTimeoutMs, prioritize, repriceDecision, shouldMarketFallback, stagedExitPlan,
+  adaptiveTimeoutMs, prioritize, prioritizeBy, repriceDecision, shouldMarketFallback, stagedExitPlan,
 } from "./execution.ts";
 
 // ---------- market-data ----------
@@ -86,6 +86,18 @@ Deno.test("exec: exits/protection always before entries", () => {
     { kind: "TAKE_PROFIT", symbol: "D" },
   ]);
   assertEquals(sorted.map((a) => a.kind), ["PANIC", "STOP_LOSS", "TAKE_PROFIT", "ENTRY"]);
+});
+
+Deno.test("exec: prioritizeBy orders arbitrary objects worst-first", () => {
+  const exits = [
+    { sym: "A", reason: "TP1" },
+    { sym: "B", reason: "STOP_LOSS" },
+    { sym: "C", reason: "PANIC" },
+  ];
+  const kind = (e: { reason: string }) =>
+    e.reason.includes("PANIC") ? "PANIC" as const : e.reason.includes("STOP") ? "STOP_LOSS" as const : "TAKE_PROFIT" as const;
+  const ordered = prioritizeBy(exits, kind).map((e) => e.sym);
+  assertEquals(ordered, ["C", "B", "A"]);
 });
 
 Deno.test("exec: staged exit prefers IOC, market last (panic=market now)", () => {

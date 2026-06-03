@@ -38,6 +38,24 @@ export function prioritize(actions: TradeAction[]): TradeAction[] {
     .map((z) => z.a);
 }
 
+/**
+ * Generic priority sort for arbitrary items (so engines can order their own
+ * domain objects without converting to TradeAction). Same rule: protective
+ * actions first, entries last; ties broken by urgency then original order.
+ */
+export function prioritizeBy<T>(items: T[], kindOf: (t: T) => ActionKind, urgencyOf: (t: T) => number = () => 0): T[] {
+  return [...items]
+    .map((t, i) => ({ t, i }))
+    .sort((x, y) => {
+      const p = PRIORITY[kindOf(x.t)] - PRIORITY[kindOf(y.t)];
+      if (p !== 0) return p;
+      const u = urgencyOf(y.t) - urgencyOf(x.t);
+      if (u !== 0) return u;
+      return x.i - y.i;
+    })
+    .map((z) => z.t);
+}
+
 export type ExitStep =
   | { type: "LIMIT_IOC"; aggressivenessBps: number }
   | { type: "MARKET" };
