@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { createHash, createHmac } from "https://deno.land/std@0.168.0/node/crypto.ts";
+import { gateSign } from "../_shared/gate-sign.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -555,11 +555,6 @@ const CONFIG = {
 };
 
 // ===== GATE.IO API =====
-function sign(method: string, path: string, body: string, ts: string, secret: string): string {
-  const hash = createHash("sha512").update(body).digest("hex");
-  return createHmac("sha512", secret).update(`${method}\n${path}\n\n${hash}\n${ts}`).digest("hex");
-}
-
 async function gate(method: string, endpoint: string, key: string, secret: string, body: Record<string, unknown> | null = null): Promise<unknown> {
   // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
   if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
@@ -569,9 +564,10 @@ async function gate(method: string, endpoint: string, key: string, secret: strin
   const path = `/api/v4${endpoint}`;
   const ts = Math.floor(Date.now() / 1000).toString();
   const bodyStr = body ? JSON.stringify(body) : "";
+  const signature = await gateSign(method, path, '', bodyStr, ts, secret);
   const res = await fetch(`https://api.gateio.ws${path}`, {
     method,
-    headers: { KEY: key, SIGN: sign(method, path, bodyStr, ts, secret), Timestamp: ts, "Content-Type": "application/json" },
+    headers: { KEY: key, SIGN: signature, Timestamp: ts, "Content-Type": "application/json" },
     body: body ? bodyStr : undefined,
   });
   if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
