@@ -74,10 +74,9 @@ are the remaining 📄):
 
 ### A) Treasury & Wallet Control
 1 bi-dir balance recon 🟡 · 2 liquid valuation (depth, not last) 📄 · 3 auto-USDT dominance 🟡 ·
-4 fee buffer ✅ wired (FEE_BUFFER_USDT) · 5 reserve vault 🟡 · 6 profit-lock vault 🟡 · 7 per-asset exposure cap ✅ ·
+4 fee buffer ✅ wired (FEE_BUFFER_USDT) · 5 reserve vault ✅ wired (RESERVE_PCT) · 6 profit-lock vault 🟡 · 7 per-asset exposure cap ✅ ·
 8 correlation exposure cap ✅ wired (`correlation.ts`) · 9 liquidity-shock sizing 🟡 · 10 dynamic sizing ✅ `scoring.positionSize()` ·
 11 auto-rebalance idle 🟡 `dust-converter` · 12 dust mgmt ✅ `dust-converter` · 13 locked-funds resolver 📄 ·
-(5 reserve vault ✅ wired RESERVE_PCT)
 14 wallet invariants ✅ `invariants` · 15 capital-velocity meter 📄
 
 ### B) Market Data & Hygiene
@@ -109,7 +108,7 @@ are the remaining 📄):
 ### G) Hard Risk Core
 66 daily loss limit ✅ · 67 max open positions ✅ INV-04 · 68 max per-trade risk ✅ caps ·
 69 portfolio VaR guard ✅ wired (`portfolio-risk.ts`) · 70 drawdown pattern guard 🟡 · 71 slippage spike guard 🟡 `riskPosture` ·
-72 API error-burst guard 🟡 `riskPosture` · 73 WS-down guard 🟡 INV-01 · 74 liquidity-vacuum guard 🟡 · 75 kill-switch levels 🟡 `RiskPosture` ladder
+72 API error-burst guard 🟡 `riskPosture` · 73 WS-down guard 🟡 INV-01 · 74 liquidity-vacuum guard ✅ wired (MAX_ENTRY_SPREAD) · 75 kill-switch levels 🟡 `RiskPosture` ladder
 
 ### H) Controlled Learning
 76 shadow twin 📄 · 77 offline training 📄 · 78 soft-params only 🟡 `governance` · 79 canary rollout 🟡 `governance` + `getCanaryFraction()` ·

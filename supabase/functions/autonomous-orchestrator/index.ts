@@ -1339,6 +1339,15 @@ async function runEliteCycle(): Promise<{
       }
     }
 
+    // Liquidity-vacuum / spread guard (#74): skip entries when the market's
+    // spread is wider than MAX_ENTRY_SPREAD (same unit as market.spread; default
+    // off). Thin/illiquid books -> avoid.
+    const __maxSpread = Number(Deno.env.get('MAX_ENTRY_SPREAD') ?? Infinity);
+    if (Number.isFinite(__maxSpread) && market && market.spread > __maxSpread) {
+      await log('info', 'RISK', `spread/liquidity guard: ${signal.pair} spread ${market.spread} > ${__maxSpread} — skip`);
+      continue;
+    }
+
     const amount = size / signal.price;
     const clientOrderId = generateClientOrderId();
     
