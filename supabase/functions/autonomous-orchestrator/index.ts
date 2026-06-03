@@ -6,7 +6,7 @@ import { riskPosture, postureBlocksEntries } from "../_shared/health.ts";
 import { computeKpis, alertDecisions } from "../_shared/metrics.ts";
 import { normalizeAmount, normalizePrice } from "../_shared/market-data.ts";
 import { fetchSpotPairRules, meetsMinimums, type SpotPair } from "../_shared/gate-rules.ts";
-import { prioritizeBy, type ActionKind } from "../_shared/execution.ts";
+import { prioritizeBy, stagedExitPlan, type ActionKind } from "../_shared/execution.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -742,6 +742,43 @@ async function executeLimitOrder(
   }
 }
 
+// Market-sell fallback for urgent exits whose limit didn't fill (#59/#60).
+// Still safety-gated (DRY_RUN simulates). Normalizes amount to symbol precision.
+async function executeMarketSell(
+  pair: string,
+  amount: number,
+  clientOrderId: string,
+): Promise<{ success: boolean; orderId?: string; filled?: number; error?: string }> {
+  try {
+    let amountStr = amount.toFixed(6);
+    try {
+      const r = (await getSymbolRules())[pair];
+      if (r) amountStr = String(normalizeAmount(amount, r.amountPrecision));
+    } catch (_e) { /* fall back to fixed format */ }
+    const order = await gateRequest('/spot/orders', 'POST', {}, {
+      currency_pair: pair,
+      side: 'sell',
+      amount: amountStr,
+      type: 'market',
+      time_in_force: 'ioc',
+      text: clientOrderId,
+    });
+    try {
+      await supabase.from('event_log').insert({
+        type: 'order_sent',
+        symbol: pair,
+        payload: { side: 'sell', amount, type: 'market', orderId: order?.id ?? null, dryRun: order?.dryRun ?? false },
+      });
+    } catch (_e) { /* best-effort */ }
+    if (order.id) {
+      return { success: true, orderId: order.id, filled: parseFloat(order.filled_total || order.amount || '0') };
+    }
+    return { success: false, error: JSON.stringify(order) };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown' };
+  }
+}
+
 // ===================== MODULE 7 & 8: STATE MACHINE & RECONCILIATION =====================
 async function reconcileState(state: EngineState, tickers: any[]): Promise<EngineState> {
   try {
@@ -1108,8 +1145,21 @@ async function runEliteCycle(): Promise<{
   
   for (const exit of exitActions) {
     const market = marketMap.get(exit.symbol);
-    const result = await executeLimitOrder(exit.symbol, 'sell', exit.amount, market?.bid || exit.price, exit.clientOrderId);
-    
+    let result = await executeLimitOrder(exit.symbol, 'sell', exit.amount, market?.bid || exit.price, exit.clientOrderId);
+
+    // Staged exit: a protective (stop/panic) exit that didn't fill on IOC falls
+    // back to a MARKET sell so we never get stuck in a losing position (#59/#60).
+    const __exitReason = String((exit as { reason?: string }).reason || '').toUpperCase();
+    const __urgent = __exitReason.includes('STOP') || __exitReason.includes('PANIC');
+    if (__urgent && (!result.success || !((result.filled ?? 0) > 0))) {
+      const __plan = stagedExitPlan(__exitReason.includes('PANIC') ? 'panic' : 'elevated');
+      if (__plan.some((s) => s.type === 'MARKET')) {
+        await log('warn', 'EXIT', `staged exit → MARKET fallback: ${exit.symbol} (${__exitReason})`);
+        const __mkt = await executeMarketSell(exit.symbol, exit.amount, generateClientOrderId());
+        if (__mkt.success) result = __mkt;
+      }
+    }
+
     if (result.success) {
       const pnlUSDT = exit.amount * exit.price * exit.pnlPercent;
       totalExitPnL += pnlUSDT;
