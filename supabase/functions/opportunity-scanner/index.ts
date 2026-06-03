@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
-import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
+import { gateSign } from "../_shared/gate-sign.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -48,25 +47,6 @@ interface ScanRequest {
 
 // ============ UTILITY FUNCTIONS ============
 
-async function sha512Hash(message: string): Promise<string> {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-512', msgBuffer);
-  return encodeHex(new Uint8Array(hashBuffer));
-}
-
-async function generateSignature(
-  method: string,
-  url: string,
-  queryString: string,
-  payloadString: string,
-  timestamp: string,
-  secret: string
-): Promise<string> {
-  const hashedPayload = await sha512Hash(payloadString);
-  const signatureString = `${method}\n${url}\n${queryString}\n${hashedPayload}\n${timestamp}`;
-  return createHmac('sha512', secret).update(signatureString).digest('hex');
-}
-
 async function fetchTickers(credentials?: GateCredentials): Promise<Ticker[]> {
   const baseUrl = 'https://api.gateio.ws';
   const endpoint = '/api/v4/spot/tickers';
@@ -78,7 +58,7 @@ async function fetchTickers(credentials?: GateCredentials): Promise<Ticker[]> {
 
   if (credentials) {
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = await generateSignature('GET', endpoint, '', '', timestamp, credentials.apiSecret);
+    const signature = await gateSign('GET', endpoint, '', '', timestamp, credentials.apiSecret);
     headers['KEY'] = credentials.apiKey;
     headers['SIGN'] = signature;
     headers['Timestamp'] = timestamp;

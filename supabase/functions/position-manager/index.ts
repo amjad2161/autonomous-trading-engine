@@ -1,8 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { gateSign } from "../_shared/gate-sign.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
-import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -35,18 +34,6 @@ const CONFIG = {
 };
 
 // ===================== GATE.IO API =====================
-async function sha512Hash(message: string): Promise<string> {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-512', msgBuffer);
-  return encodeHex(new Uint8Array(hashBuffer));
-}
-
-async function generateSignature(method: string, url: string, queryString: string, payloadString: string, timestamp: string, secret: string): Promise<string> {
-  const hashedPayload = await sha512Hash(payloadString);
-  const signatureString = `${method}\n${url}\n${queryString}\n${hashedPayload}\n${timestamp}`;
-  return createHmac('sha512', secret).update(signatureString).digest('hex');
-}
-
 async function gateRequest(endpoint: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', params: Record<string, string> = {}, body?: Record<string, unknown>): Promise<any> {
   // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
   if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
@@ -62,7 +49,7 @@ async function gateRequest(endpoint: string, method: 'GET' | 'POST' | 'DELETE' =
   const fullUrl = queryString ? `${baseUrl}${url}?${queryString}` : `${baseUrl}${url}`;
   const payloadString = body ? JSON.stringify(body) : '';
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = await generateSignature(method, url, queryString, payloadString, timestamp, GATE_API_SECRET);
+  const signature = await gateSign(method, url, queryString, payloadString, timestamp, GATE_API_SECRET);
 
   const response = await fetch(fullUrl, {
     method,
