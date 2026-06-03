@@ -61,6 +61,7 @@ are the remaining 📄):
 | `profiles.ts` + `health.ts` | regimes, toxicity, personality, posture, routing; A1.1/1.2/1.3/1.5, B1, #30–33 |
 | `scoring.ts` | net-edge cost model + sizing + score + expiry + cooldown; #10, #34, #41, #46–47, #54 |
 | `kelly.ts` | quant sizing: expectancy, fractional-Kelly, risk-of-ruin, Sortino; #10, #46, #68 |
+| `funding-arb.ts` | delta-neutral funding/basis carry strategy (capital-agnostic); the most viable retail method; #36, #40 |
 | `market-data.ts` | hygiene + microstructure; #16–29, #35 |
 | `treasury.ts` | capital management; #1–13, #15 |
 | `execution.ts` + `order-state.ts` | exits-first queue, staging, FSM; #56–65 |
