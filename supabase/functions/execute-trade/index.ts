@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
-import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
+import { gateSign } from "../_shared/gate-sign.ts";
 import { requireAuth, AuthError } from "../_shared/auth.ts";
 import { assertOrderAllowed, simulateOrder, safetyBanner, OrderBlockedError } from "../_shared/safety.ts";
 
@@ -77,25 +76,6 @@ function validateRequest(request: any): { valid: boolean; error?: string } {
     return { valid: false, error: 'Invalid stopLoss' };
   }
   return { valid: true };
-}
-
-async function sha512Hash(message: string): Promise<string> {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-512', msgBuffer);
-  return encodeHex(new Uint8Array(hashBuffer));
-}
-
-async function generateSignature(
-  method: string,
-  url: string,
-  queryString: string,
-  payloadString: string,
-  timestamp: string,
-  secret: string
-): Promise<string> {
-  const hashedPayload = await sha512Hash(payloadString);
-  const signatureString = `${method}\n${url}\n${queryString}\n${hashedPayload}\n${timestamp}`;
-  return createHmac('sha512', secret).update(signatureString).digest('hex');
 }
 
 async function getTicker(pair: string): Promise<{ bid: number; ask: number; last: number; volume: number } | null> {
@@ -205,7 +185,7 @@ async function placeSmartOrder(
   const body = { currency_pair: pair, side, amount, price: priceStr, type: 'limit', time_in_force: 'ioc' };
   const payloadString = JSON.stringify(body);
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = await generateSignature('POST', endpoint, '', payloadString, timestamp, credentials.apiSecret);
+  const signature = await gateSign('POST', endpoint, '', payloadString, timestamp, credentials.apiSecret);
 
   const headers = { 'KEY': credentials.apiKey, 'SIGN': signature, 'Timestamp': timestamp, 'Content-Type': 'application/json', 'Accept': 'application/json' };
   console.log(`[Trade Executor] Placing LIVE smart ${side} order: ${amount} ${pair} @ ${priceStr}`);
