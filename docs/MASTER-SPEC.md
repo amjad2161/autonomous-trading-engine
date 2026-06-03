@@ -96,7 +96,7 @@ are the remaining 📄):
 
 ### E) Scoring, Planning, Autonomy
 46 unified net-edge score ✅ `scoring.scoreOpportunity()` · 47 risk-weighted allocation 🟡 · 48 multi-horizon brain 📄 ·
-49 pre-trade exit plan 🟡 `execute-trade` · 50 scenario micro-sim 📄 · 51 regime switcher ✅ profiles/personality ·
+49 pre-trade exit plan 🟡 `execute-trade` · 50 scenario micro-sim ✅ `scenario.ts` · 51 regime switcher ✅ profiles/personality ·
 52 opportunity budgeting 🟡 caps · 53 correlation selection ✅ wired (`correlation.ts`) · 54 cooldown per symbol ✅ `scoring`/profiles ·
 55 trade-frequency governor ✅ maxTradesPerHour
 
