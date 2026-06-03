@@ -1,0 +1,17 @@
+# Dashboard only. The Supabase backend (Postgres + Edge Functions) runs via
+# `supabase start` (see docs/RUN-LOCAL.md). Bring up the dashboard with:
+#   docker compose up --build
+# then open http://localhost:8080
+services:
+  dashboard:
+    build:
+      context: .
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-http://127.0.0.1:54321}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:-}
+        VITE_SUPABASE_PROJECT_ID: ${VITE_SUPABASE_PROJECT_ID:-local}
+        VITE_FUNCTION_SECRET: ${VITE_FUNCTION_SECRET:-}
+        VITE_SPLINE_SCENE_URL: ${VITE_SPLINE_SCENE_URL:-}
+    ports:
+      - "8080:80"
+    restart: unless-stopped
