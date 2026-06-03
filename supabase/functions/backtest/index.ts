@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { sma, stdDev } from "../_shared/math.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -112,37 +113,7 @@ async function fetchHistoricalData(
 }
 
 // Calculate Simple Moving Average
-function sma(data: number[], period: number): number[] {
-  const result: number[] = [];
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(NaN);
-    } else {
-      const slice = data.slice(i - period + 1, i + 1);
-      result.push(slice.reduce((a, b) => a + b, 0) / period);
-    }
-  }
-  return result;
-}
-
 // Calculate Standard Deviation
-function stdDev(data: number[], period: number): number[] {
-  const means = sma(data, period);
-  const result: number[] = [];
-  
-  for (let i = 0; i < data.length; i++) {
-    if (i < period - 1) {
-      result.push(NaN);
-    } else {
-      const slice = data.slice(i - period + 1, i + 1);
-      const mean = means[i];
-      const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
-      result.push(Math.sqrt(variance));
-    }
-  }
-  return result;
-}
-
 // Generate trading signals based on strategy
 function generateSignals(
   candles: Candle[],
