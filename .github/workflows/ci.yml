@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    name: Frontend (typecheck / test / build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.app.json
+      - name: Unit tests
+        run: npm run test
+      - name: Build
+        run: npm run build
+
+  edge-functions:
+    name: Edge function logic (Deno proofs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+      - name: Shared-module tests
+        run: deno test --allow-env supabase/functions/_shared/
