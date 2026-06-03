@@ -1,7 +1,7 @@
 import { ReactNode, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
-import { SplineScene } from "@/components/SplineScene";
+import { SplineScene, splineSceneUrl } from "@/components/SplineScene";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -10,9 +10,9 @@ interface DashboardLayoutProps {
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Optional Spline 3D background. Only active when VITE_SPLINE_SCENE_URL is set;
-  // otherwise this is a no-op and the dashboard looks exactly as before.
-  const splineUrl = import.meta.env.VITE_SPLINE_SCENE_URL as string | undefined;
+  // Spline 3D background — shows the design scene by default; override or disable
+  // via VITE_SPLINE_SCENE_URL (set to "" to turn it off).
+  const splineUrl = splineSceneUrl();
 
   return (
     <div className={`min-h-screen flex ${splineUrl ? "bg-transparent" : "bg-background"}`}>

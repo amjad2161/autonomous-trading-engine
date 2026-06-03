@@ -10,7 +10,7 @@
 | 3 | Autonomous autopilot bot for Gate.io: modes, aggressiveness, **mode selector**, full control | ✅ | `_shared/profiles.ts`, `TradingModePanel`, `config` function, orchestrator wired (two-level: is_active + Autopilot) |
 | 4 | Autopilot **by the market and the balance** (adaptive) | ✅ | AUTO mode in `profiles.adaptiveParams()` (volatility/trend/balance/drawdown) |
 | 5 | All info: methodology, technologies, rules, platform rules, when-to/when-not | ✅ | `docs/TRADING-GUIDE.md` |
-| 6 | Spline dashboard **design** | 🟡 | Embed wired (`SplineScene`, env-gated). **Blocked on you:** paste the public `.splinecode` URL (embed) and/or a screenshot (restyle) |
+| 6 | Spline dashboard **design** | ✅ | Embedded as the default dashboard background (`SplineScene` + `DashboardLayout`), scene `xrddGswnEh9JfZEJ`. Override/disable via `VITE_SPLINE_SCENE_URL` |
 | 7 | Institutional spec: Layers 2 & 3, 100 improvements, runbooks | ✅ cores | `docs/MASTER-SPEC.md` (100-item traceability), `INSTITUTIONAL-SPEC.md`; pure cores built, runtime-only items marked 📄 |
 | 8 | "Decipher Gate.io's algorithms / data collection" | ✅ | `_shared/gate-rules.ts` — public mechanics modelled precisely (fees/VIP/GT, TIF, price-time matching, precision/min, rate limits, WS) + per-symbol rules loader |
 | 9 | Install & operate it **on my own computer** | ✅ | `docs/RUN-LOCAL.md` + `scripts/local-ticker.mjs` (`npm run ticker`); keys stay in a gitignored local `.env` |
@@ -25,7 +25,6 @@
 - Edge detector run on **real** market data → honest "no edge" verdict.
 
 ## Genuinely open items (need you)
-- **Spline design** (#6): send the `.splinecode` URL or a screenshot.
 - **Deploy & go-live path** (#11): run locally per `RUN-LOCAL.md`, then deploy;
   pass `edge-test` on real data before ever setting `TRADING_MODE=LIVE`.
 - **Revoke the exposed key** (#2/#10) and create a least-privilege one.

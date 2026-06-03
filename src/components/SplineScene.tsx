@@ -16,6 +16,17 @@ import { useEffect } from 'react';
 
 const VIEWER_SRC = 'https://unpkg.com/@splinetool/viewer/build/spline-viewer.js';
 
+// The dashboard's design scene (public .splinecode export — not a secret).
+// Override per-environment with VITE_SPLINE_SCENE_URL; set it to "" to disable.
+export const DEFAULT_SPLINE_SCENE = 'https://prod.spline.design/xrddGswnEh9JfZEJ/scene.splinecode';
+
+/** Resolve the active scene URL: env override wins; unset -> the default scene. */
+export function splineSceneUrl(): string | undefined {
+  const env = import.meta.env.VITE_SPLINE_SCENE_URL as string | undefined;
+  if (env === undefined) return DEFAULT_SPLINE_SCENE; // not configured -> show default design
+  return env || undefined;                            // explicit "" -> disabled
+}
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
@@ -50,7 +61,7 @@ interface SplineSceneProps {
 }
 
 export function SplineScene({ url, className }: SplineSceneProps) {
-  const sceneUrl = url ?? (import.meta.env.VITE_SPLINE_SCENE_URL as string | undefined);
+  const sceneUrl = url ?? splineSceneUrl();
 
   useEffect(() => {
     if (sceneUrl) ensureViewerScript();
