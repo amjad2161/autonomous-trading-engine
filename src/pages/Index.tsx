@@ -21,7 +21,8 @@ import {
   TradingStatsPanel,
   RapidTraderPanel,
   GoalsPanel,
-  TradingModePanel
+  TradingModePanel,
+  SystemHealthPanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -131,7 +132,7 @@ const Index = () => {
               <RiskControlPanel />
             </div>
             <div className="lg:col-span-4">
-              <TradingStatsPanel />
+              <SystemHealthPanel />
             </div>
             <div className="lg:col-span-6 h-[350px]">
               <PositionsPanel />
