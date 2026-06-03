@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { gateSign } from "../_shared/gate-sign.ts";
 import { guardSpotOrder, getRiskCaps, getCanaryFraction } from "../_shared/safety.ts";
-import { resolveConfig, type MarketRegime } from "../_shared/profiles.ts";
+import { resolveConfig, type MarketRegime as AdaptiveRegime } from "../_shared/profiles.ts";
 import { evaluateInvariants, invariantReason } from "../_shared/invariants.ts";
 import { riskPosture, postureBlocksEntries } from "../_shared/health.ts";
 import { computeKpis, alertDecisions } from "../_shared/metrics.ts";
@@ -1214,9 +1214,14 @@ async function runEliteCycle(): Promise<{
   // separately at the order site. Default autopilot=false → no new entries until the
   // user turns Autopilot ON in the dashboard (two-level control with is_active).
   const __cfgState = await getDBState();
-  const __regime: MarketRegime = {
-    volatilityPct: 2,
-    trendStrength: 0,
+  const __regime: AdaptiveRegime = {
+    // Real aggregates from this cycle (not hardcoded) so AUTO truly adapts.
+    volatilityPct: Number.isFinite(avgVol) ? avgVol : 2,
+    trendStrength: dominantRegime === 'TREND_CONTINUATION' ? 0.6
+      : dominantRegime === 'BREAKOUT_EXPANSION' ? 0.4
+      : dominantRegime === 'PANIC_LIQUIDITY_EVENT' ? -0.7
+      : dominantRegime === 'DISTRIBUTION_EXHAUSTION' ? -0.3
+      : 0,
     balanceUsdt: state.currentBalance,
     drawdownPct: state.dailyPnLPercent < 0 ? -state.dailyPnLPercent * 100 : 0,
   };
@@ -1240,10 +1245,14 @@ async function runEliteCycle(): Promise<{
   const __wsStale = __lastWsTick > 0 ? (Date.now() - __lastWsTick > __wsStaleMs) : undefined;
   const __inv = evaluateInvariants({
     wsStale: __wsStale,
-    dailyPnlUsdt: state.dailyPnLPercent !== undefined ? state.currentBalance * state.dailyPnLPercent : undefined,
+    // True daily P&L in USDT (includes open-position value) — not balance*pct,
+    // which excludes deployed capital and could miss a real loss past the cap.
+    dailyPnlUsdt: state.dailyPnL,
     dailyLossCapUsdt: __caps.maxDailyLossUsdt,
     openPositions: __openPos,
-    maxOpenPositions: cfg.maxOpenPositions,
+    // The HARD env cap floors the profile's looser value — an aggressive mode
+    // may not relax what is documented as a hard invariant.
+    maxOpenPositions: Math.min(cfg.maxOpenPositions, __caps.maxOpenPositions),
   });
   const __posture = riskPosture({
     dailyDrawdownPct: __regime.drawdownPct,
@@ -1461,10 +1470,14 @@ serve(async (req) => {
         .select('actual_pnl,status')
         .order('executed_at', { ascending: false })
         .limit(200);
-      const rows = (recent ?? []).map((t: { actual_pnl: number | null; status: string | null }) => ({
-        pnlUsdt: Number(t.actual_pnl ?? 0),
-        filled: t.status !== 'failed' && t.status !== 'rejected',
-      }));
+      // Only CLOSED trades carry a realized P&L. Entry rows have a null
+      // actual_pnl; counting them as 0-P&L trades skews win rate / expectancy.
+      const rows = (recent ?? [])
+        .filter((t: { actual_pnl: number | null }) => t.actual_pnl !== null && t.actual_pnl !== undefined)
+        .map((t: { actual_pnl: number | null; status: string | null }) => ({
+          pnlUsdt: Number(t.actual_pnl),
+          filled: t.status !== 'failed' && t.status !== 'rejected',
+        }));
       const kpis = computeKpis(rows);
       const alerts = alertDecisions(kpis);
 
