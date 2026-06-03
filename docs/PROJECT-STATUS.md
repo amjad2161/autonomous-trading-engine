@@ -40,7 +40,13 @@ fully offline (vendored `_test_assert.ts`, no external fetch).
 - `deno test --allow-env supabase/functions/_shared/` → **77 passed, 0 failed**
   (running them caught and fixed a real bug: the `BAD_NOTIONAL` error message).
 - ESLint on all files added/edited this session → **0 errors**.
-(Toolchain reachable here: npm registry + github. Blocked: deno.land, api.gateio.ws.)
+- **Edge detector on REAL data:** ran `edgeVerdict` on live hourly candles
+  (Crypto.com market-data MCP, BTC_USDT & ETH_USDT, 48 samples each). Result:
+  **`hasEdge=false`, skill −0.074 (BTC) / −0.034 (ETH)** — the naive model is
+  *worse* than the market base rate. This is the honest, expected outcome and
+  exactly what should gate against going live. The pipeline works; there is no
+  free edge on this sample.
+(Toolchain reachable here: npm registry + github + Crypto.com MCP. Blocked: deno.land, api.gateio.ws.)
 
 ## 🟡 Needs your runtime to *finish* (cannot be done from this sandbox)
 
