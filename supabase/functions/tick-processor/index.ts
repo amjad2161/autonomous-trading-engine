@@ -1,8 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { gateSign } from "../_shared/gate-sign.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
-import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -75,19 +74,6 @@ let tradesThisMinute = 0;
 let lastLossTime = 0;
 
 // ===================== GATE.IO API =====================
-async function sha512Hash(message: string): Promise<string> {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-512', msgBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function generateSignature(method: string, url: string, queryString: string, payloadString: string, timestamp: string): Promise<string> {
-  const hashedPayload = await sha512Hash(payloadString);
-  const signatureString = `${method}\n${url}\n${queryString}\n${hashedPayload}\n${timestamp}`;
-  return createHmac('sha512', GATE_API_SECRET).update(signatureString).digest('hex');
-}
-
 async function executeOrder(pair: string, side: 'buy' | 'sell', amount: number, price: number): Promise<{ success: boolean; orderId?: string; error?: string }> {
   try {
     const endpoint = '/api/v4/spot/orders';
@@ -109,7 +95,7 @@ async function executeOrder(pair: string, side: 'buy' | 'sell', amount: number, 
     if (__sim) return { success: true, orderId: __sim.id };
 
     const bodyStr = JSON.stringify(body);
-    const signature = await generateSignature('POST', endpoint, '', bodyStr, timestamp);
+    const signature = await gateSign('POST', endpoint, '', bodyStr, timestamp, GATE_API_SECRET);
     
     const response = await fetch(`https://api.gateio.ws${endpoint}`, {
       method: 'POST',

@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { gateSign } from "../_shared/gate-sign.ts";
 import { guardSpotOrder, getRiskCaps, getCanaryFraction } from "../_shared/safety.ts";
 import { resolveConfig, type MarketRegime } from "../_shared/profiles.ts";
 import { evaluateInvariants, invariantReason } from "../_shared/invariants.ts";
@@ -12,8 +13,6 @@ import { correlationGate } from "../_shared/correlation.ts";
 import { varGate } from "../_shared/portfolio-risk.ts";
 import { evaluateEntryGate } from "../_shared/entry-gate.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
-import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -191,18 +190,6 @@ interface EngineState {
 }
 
 // ===================== GATE.IO API =====================
-async function sha512Hash(message: string): Promise<string> {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-512', msgBuffer);
-  return encodeHex(new Uint8Array(hashBuffer));
-}
-
-async function generateSignature(method: string, url: string, queryString: string, payloadString: string, timestamp: string, secret: string): Promise<string> {
-  const hashedPayload = await sha512Hash(payloadString);
-  const signatureString = `${method}\n${url}\n${queryString}\n${hashedPayload}\n${timestamp}`;
-  return createHmac('sha512', secret).update(signatureString).digest('hex');
-}
-
 // ===================== ERROR RECOVERY SYSTEM =====================
 const ERROR_RECOVERY = {
   MAX_RETRIES: 3,
@@ -295,7 +282,7 @@ async function gateRequest(endpoint: string, method: 'GET' | 'POST' | 'DELETE' =
     const fullUrl = queryString ? `${baseUrl}${url}?${queryString}` : `${baseUrl}${url}`;
     const payloadString = body ? JSON.stringify(body) : '';
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = await generateSignature(method, url, queryString, payloadString, timestamp, GATE_API_SECRET);
+    const signature = await gateSign(method, url, queryString, payloadString, timestamp, GATE_API_SECRET);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
