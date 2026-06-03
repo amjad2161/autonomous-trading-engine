@@ -7,6 +7,7 @@ import { computeKpis, alertDecisions } from "../_shared/metrics.ts";
 import { normalizeAmount, normalizePrice } from "../_shared/market-data.ts";
 import { fetchSpotPairRules, meetsMinimums, type SpotPair } from "../_shared/gate-rules.ts";
 import { prioritizeBy, stagedExitPlan, type ActionKind } from "../_shared/execution.ts";
+import { feeBufferOk } from "../_shared/treasury.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1264,7 +1265,13 @@ async function runEliteCycle(): Promise<{
   if (postureBlocksEntries(__posture.posture)) {
     await log('warn', 'RISK', `🛑 Risk posture ${__posture.posture} — entries blocked: ${__posture.reasons.join(', ')}`);
   }
-  const __entriesBlocked = !cfg.autopilot || __inv.blockEntries || postureBlocksEntries(__posture.posture);
+  // Fee-buffer gate (#4): keep enough USDT for fees; block new entries if breached.
+  const __feeBufferUsdt = Number(Deno.env.get('FEE_BUFFER_USDT') ?? 5);
+  const __belowFeeBuffer = !feeBufferOk(state.currentBalance, __feeBufferUsdt);
+  if (__belowFeeBuffer) {
+    await log('warn', 'RISK', `🛑 USDT $${state.currentBalance.toFixed(2)} below fee buffer $${__feeBufferUsdt} — entries blocked`);
+  }
+  const __entriesBlocked = !cfg.autopilot || __inv.blockEntries || postureBlocksEntries(__posture.posture) || __belowFeeBuffer;
 
   const maxEntries = state.systemState === 'DEFENSE' ? 1 : (state.systemState === 'TURBO' ? 3 : 2);
 
