@@ -55,6 +55,13 @@ The **default tab is "Hyper"** → the system is wired to foreground the
 | `_shared/scoring.ts` | NEW | Net-edge cost model, dynamic sizing, opportunity scoring, expiry, cooldown. |
 | `_shared/order-state.ts` | NEW | Order lifecycle state machine (NEW→…→FILLED), idempotent, partial fills. |
 | `_shared/governance.ts` | NEW | SHADOW→CANARY→LIVE promotion gates + auto-rollback on KPI degradation. |
+| `_shared/market-data.ts` | NEW | Freshness, spread, depth-at-X%, book-walked slippage, quality score, tick normalization. |
+| `_shared/treasury.ts` | NEW | USDT target, rebalance plan, fee buffer, profit-lock, exposure room, liquidity-shock sizing. |
+| `_shared/execution.ts` | NEW | Priority queue (exits first), staged exit, smart reprice, market-fallback, adaptive timeouts. |
+| `_shared/replay.ts` | NEW | Deterministic event-sourcing ledger reducer + replay(). |
+| `_shared/metrics.ts` | NEW | KPI aggregation (win rate, profit factor, drawdown) + alert decisions. |
+| `_shared/validation.ts` | NEW | Brier/log-loss/skill-score/calibration/Sharpe + edgeVerdict (LIVE gate). |
+| `_shared/dataset.ts` | NEW | Real Gate.io candlestick loader + up/down dataset for backtests. |
 | `config` | NEW | Runtime get/set of the active mode + autopilot flags (stored in `trading_system_state.settings`). |
 
 ### 3.2 The orchestration brain

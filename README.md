@@ -1,3 +1,28 @@
+# Autonomous Trading Engine (Gate.io, USDT-base)
+
+A single-user, paper-first autonomous **spot** trading dashboard for Gate.io:
+React PWA → Supabase Edge Functions → Gate.io v4. Built around a hard **safety
+floor** (DRY_RUN default, risk caps, kill switch, no leverage) with institutional
+governance (formal invariants, risk posture, Shadow/Canary, deterministic replay)
+and an honest **edge detector** that must pass before going live.
+
+> ⚠️ Not a guaranteed money-maker. Defaults to DRY_RUN (real data, no live orders).
+> Going LIVE is a deliberate, owner-only action with a least-privilege, IP-restricted key.
+
+### 📚 Documentation
+- [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md) — what's done, what needs your runtime, how to verify
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/ARCHITECTURE-DIAGRAM.md`](docs/ARCHITECTURE-DIAGRAM.md) — system map & diagrams
+- [`docs/MASTER-SPEC.md`](docs/MASTER-SPEC.md) — full blueprint + 100-item traceability matrix
+- [`docs/INSTITUTIONAL-SPEC.md`](docs/INSTITUTIONAL-SPEC.md) — Layers 2 & 3 (invariants, governance, replay)
+- [`docs/TRADING-GUIDE.md`](docs/TRADING-GUIDE.md) — methodology, Gate.io rules, when-to/when-not
+- [`docs/SECURITY-AND-ROADMAP.md`](docs/SECURITY-AND-ROADMAP.md) — findings, fixes, staged plan
+- [`docs/LOVABLE-PROMPT.md`](docs/LOVABLE-PROMPT.md) — one prompt to regenerate the system
+
+Quick start: `deno test supabase/functions/_shared/` (proofs) · `npm i && npm run dev` (dashboard).
+Safety/run details in `PROJECT-STATUS.md`.
+
+---
+
 # Welcome to your Lovable project
 
 ## Project info
