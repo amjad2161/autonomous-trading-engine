@@ -78,8 +78,11 @@ VITE_FUNCTION_SECRET=same-value-as-FUNCTION_SHARED_SECRET
 
 ```bash
 npm run dev      # dashboard at http://localhost:5173
-# in another terminal:
+# in a second terminal — the autonomous loop:
 SUPABASE_ANON_KEY=<anon> FUNCTION_SECRET=<secret> npm run ticker
+# in a third terminal — WS market-data freshness (feeds INV-01; if it stops,
+# the system stops opening new entries — fail-safe):
+SUPABASE_ANON_KEY=<anon> FUNCTION_SECRET=<secret> npm run ws
 ```
 Open the dashboard → **Autopilot** tab → turn **Autopilot ON** and pick a mode.
 With `TRADING_MODE=DRY_RUN` it shadow-trades on real data and sends **no** orders.

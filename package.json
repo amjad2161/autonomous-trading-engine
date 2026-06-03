@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "ticker": "node scripts/local-ticker.mjs"
+    "ticker": "node scripts/local-ticker.mjs",
+    "ws": "node scripts/ws-telemetry.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

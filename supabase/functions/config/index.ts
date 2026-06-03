@@ -68,6 +68,21 @@ serve(async (req) => {
 
     const currentSettings: Record<string, unknown> = (row?.settings as Record<string, unknown>) ?? {};
 
+    if (command === "ws_heartbeat") {
+      // Liveness ping from the local WS telemetry service -> feeds INV-01 (wsStale).
+      const next = { ...currentSettings, lastWsTickMs: Date.now() };
+      if (row?.id) {
+        await supabase
+          .from("trading_system_state")
+          .update({ settings: next })
+          .eq("id", row.id);
+      }
+      return new Response(JSON.stringify({ success: true, lastWsTickMs: next.lastWsTickMs }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (command === "set") {
       const next: Record<string, unknown> = { ...currentSettings };
 

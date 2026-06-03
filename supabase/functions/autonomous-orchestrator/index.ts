@@ -1148,7 +1148,13 @@ async function runEliteCycle(): Promise<{
   const __openPos = Array.isArray((state as unknown as { positions?: unknown[] }).positions)
     ? (state as unknown as { positions: unknown[] }).positions.length
     : undefined;
+  // INV-01 input: market-data freshness from the local WS telemetry heartbeat.
+  // Undefined (not monitored) when no heartbeat has arrived yet, so it can't fire.
+  const __lastWsTick = Number((__cfgState?.settings as Record<string, unknown> | undefined)?.lastWsTickMs ?? 0);
+  const __wsStaleMs = Number(Deno.env.get('WS_STALE_MS') ?? 5000);
+  const __wsStale = __lastWsTick > 0 ? (Date.now() - __lastWsTick > __wsStaleMs) : undefined;
   const __inv = evaluateInvariants({
+    wsStale: __wsStale,
     dailyPnlUsdt: state.dailyPnLPercent !== undefined ? state.currentBalance * state.dailyPnLPercent : undefined,
     dailyLossCapUsdt: __caps.maxDailyLossUsdt,
     openPositions: __openPos,
