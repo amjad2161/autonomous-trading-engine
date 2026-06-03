@@ -42,12 +42,26 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
     
-    // Verify the keys work first
+    // Verify the keys work first.
+    // Gate.io v4 private endpoints require KEY + SIGN + Timestamp, where
+    // SIGN = HMAC-SHA512( METHOD \n PATH \n query \n SHA512(body) \n ts ).
+    // (Previously only KEY + Timestamp were sent, so verification always failed.)
     const timestamp = Math.floor(Date.now() / 1000).toString();
+    const verifyMethod = 'GET';
+    const verifyPath = '/api/v4/spot/accounts';
+    const enc = new TextEncoder();
+    const bodyHashBuf = await crypto.subtle.digest('SHA-512', enc.encode(''));
+    const bodyHashHex = Array.from(new Uint8Array(bodyHashBuf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    const signString = `${verifyMethod}\n${verifyPath}\n\n${bodyHashHex}\n${timestamp}`;
+    const signKey = await crypto.subtle.importKey('raw', enc.encode(apiSecret), { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']);
+    const sigBuf = await crypto.subtle.sign('HMAC', signKey, enc.encode(signString));
+    const signatureHex = Array.from(new Uint8Array(sigBuf)).map((b) => b.toString(16).padStart(2, '0')).join('');
     const verifyRes = await fetch('https://api.gateio.ws/api/v4/spot/accounts', {
       headers: {
         'KEY': apiKey,
+        'SIGN': signatureHex,
         'Timestamp': timestamp,
+        'Accept': 'application/json',
       },
     });
     

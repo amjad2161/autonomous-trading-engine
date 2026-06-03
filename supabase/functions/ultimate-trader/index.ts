@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { guardSpotOrder } from "../_shared/safety.ts";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
 
@@ -77,6 +78,11 @@ async function gateRequest(
   method: string, endpoint: string, apiKey: string, apiSecret: string,
   params: Record<string, string> = {}, body?: unknown
 ): Promise<unknown> {
+  // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
+  if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
+    const __sim = guardSpotOrder('ultimate-trader', body as Record<string, unknown>);
+    if (__sim) return __sim;
+  }
   const baseUrl = 'https://api.gateio.ws';
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const queryString = new URLSearchParams(params).toString();

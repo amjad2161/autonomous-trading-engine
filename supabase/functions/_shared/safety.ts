@@ -145,7 +145,9 @@ export function assertOrderAllowed(intent: OrderIntent): TradingMode {
     );
   }
 
-  return getTradingMode();
+  // Honour the optional "prove an edge before risking money" gate: LIVE is
+  // downgraded to DRY_RUN when REQUIRE_VALIDATION is on but validation hasn't passed.
+  return effectiveModeWithValidation();
 }
 
 /**
@@ -186,6 +188,106 @@ export async function withOrderGuard<T>(
   }
   console.log(`[SAFETY] ${intent.function} LIVE — ${intent.symbol} ${intent.side} ~${intent.notionalUsdt.toFixed(2)} USDT`);
   return await sendLiveOrder();
+}
+
+// -----------------------------------------------------------------------------
+// Spot-order choke point for the many engines.
+// -----------------------------------------------------------------------------
+// Each trading function has its own private gate()/gateRequest() helper. Rather
+// than rewrite every engine's control flow, each helper calls guardSpotOrder()
+// once, at the top, for POSTs to /spot/orders. The contract:
+//   - LIVE  -> returns null  => caller proceeds with the real request unchanged.
+//   - DRY_RUN -> returns a synthetic Gate.io-shaped order response (so downstream
+//                code continues as if the order placed) and NO live order is sent.
+//   - cap/kill violation -> throws OrderBlockedError (caller's try/catch handles).
+//
+// Fail-safe by construction: any miscalculation blocks or simulates — it can
+// never turn a DRY_RUN into a live order.
+
+export interface SyntheticGateOrder {
+  id: string;
+  text: string;
+  status: string;
+  currency_pair: string;
+  side: string;
+  amount: string;
+  price: string;
+  filled_total: string;
+  fill_price: string;
+  left: string;
+  fee: string;
+  create_time: string;
+  create_time_ms: string;
+  dryRun: true;
+}
+
+function notionalFromBody(body: Record<string, unknown>): number {
+  const amount = Number(body.amount ?? 0);
+  const price = Number(body.price ?? 0);
+  if (price > 0 && amount > 0) return price * amount;
+  // Market orders: Gate spot market BUY uses `amount` as quote (USDT) notional.
+  if (amount > 0) return amount;
+  return 0;
+}
+
+/**
+ * Guard a /spot/orders POST. Returns a synthetic order (DRY_RUN) or null (LIVE).
+ * Throws OrderBlockedError if a cap or the kill switch is hit.
+ */
+export function guardSpotOrder(
+  fn: string,
+  body: Record<string, unknown>,
+): SyntheticGateOrder | null {
+  const symbol = String(body.currency_pair ?? body.symbol ?? "?");
+  const side = (String(body.side ?? "buy") === "sell" ? "sell" : "buy") as "buy" | "sell";
+  const amount = Number(body.amount ?? 0);
+  const price = Number(body.price ?? 0);
+  const notionalUsdt = notionalFromBody(body);
+
+  const mode = assertOrderAllowed({ function: fn, symbol, side, notionalUsdt, price, amount });
+  if (mode === "LIVE") return null;
+
+  const now = Date.now();
+  console.log(
+    `[SAFETY] ${fn} DRY_RUN — would ${side} ${amount} ${symbol} @ ${price || "mkt"} ` +
+      `(~${notionalUsdt.toFixed(2)} USDT). No live order sent.`,
+  );
+  return {
+    id: `dryrun-${crypto.randomUUID()}`,
+    text: "t-dryrun",
+    status: "closed",
+    currency_pair: symbol,
+    side,
+    amount: String(amount || 0),
+    price: String(price || 0),
+    filled_total: String(notionalUsdt || 0),
+    fill_price: String(price || 0),
+    left: "0",
+    fee: "0",
+    create_time: String(Math.floor(now / 1000)),
+    create_time_ms: String(now),
+    dryRun: true,
+  };
+}
+
+/** True once validation (backtest/walk-forward) has been signed off via env. */
+export function validationPassed(): boolean {
+  return envFlag("VALIDATION_PASSED");
+}
+
+/**
+ * Optional hard gate for the autonomous loop: if REQUIRE_VALIDATION is on, LIVE
+ * trading is refused until VALIDATION_PASSED is also set. Lets you enforce
+ * "prove an edge before risking money" at the system level. Returns the
+ * effective mode (downgrades LIVE->DRY_RUN when validation is required but absent).
+ */
+export function effectiveModeWithValidation(): TradingMode {
+  const mode = getTradingMode();
+  if (mode === "LIVE" && envFlag("REQUIRE_VALIDATION") && !validationPassed()) {
+    console.warn("[SAFETY] LIVE requested but REQUIRE_VALIDATION is on and VALIDATION_PASSED is not set — forcing DRY_RUN.");
+    return "DRY_RUN";
+  }
+  return mode;
 }
 
 /** Small banner for function logs so the active mode is always visible. */

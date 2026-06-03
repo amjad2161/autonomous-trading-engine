@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { guardSpotOrder } from "../_shared/safety.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHash, createHmac } from "https://deno.land/std@0.168.0/node/crypto.ts";
 
@@ -218,6 +219,11 @@ function sign(method: string, path: string, body: string, ts: string, secret: st
 }
 
 async function gate(method: string, endpoint: string, key: string, secret: string, body: Record<string, unknown> | null = null): Promise<unknown> {
+  // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
+  if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
+    const __sim = guardSpotOrder('realtime-trader', body as Record<string, unknown>);
+    if (__sim) return __sim;
+  }
   const path = `/api/v4${endpoint}`;
   const ts = Math.floor(Date.now() / 1000).toString();
   const bodyStr = body ? JSON.stringify(body) : "";

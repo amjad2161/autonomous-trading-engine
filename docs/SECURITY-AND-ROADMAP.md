@@ -36,8 +36,11 @@ risking funds.
 default**), a `KILL_SWITCH`, and hard risk caps. `execute-trade` now routes its
 order through the gate: all market data / slippage / liquidity / edge checks run
 against **real** data; only the final POST is withheld unless `TRADING_MODE=LIVE`.
-This is the "real data, closed firing pin" model. **Still to do:** wire the same
-gate into the other 14 order sites (§3).
+This is the "real data, closed firing pin" model. **Now wired into all 15
+live-order sites** (`execute-trade` directly; the other 14 via `guardSpotOrder()`
+injected at each engine's order helper). A new optional gate
+`REQUIRE_VALIDATION` downgrades LIVE→DRY_RUN until `VALIDATION_PASSED` is set, so
+you can enforce "prove an edge before risking money" at the system level.
 
 ### 🟠 F3 — `.env` committed to git — MEDIUM
 The tracked `.env` held only Supabase project id + anon (publishable) key — those
@@ -55,10 +58,11 @@ currently be repeated ~10×. This is the root cause that let F2 exist.
 Acceptable for a personal tool, dangerous combined with F1. Tighten to your own
 origin once a domain is fixed.
 
-### 🟡 F6 — `update-secrets` key verification is broken — LOW
-Its verification call to `/spot/accounts` sends `KEY` + `Timestamp` but **no
-`SIGN`**, so Gate.io will reject it — the "verified" path can't actually succeed
-as written. Note for the consolidation pass; not safety-critical.
+### 🟡 F6 — `update-secrets` key verification was broken — FIXED
+Its verification call to `/spot/accounts` sent `KEY` + `Timestamp` but **no
+`SIGN`**, so Gate.io always rejected it — the "verified" path could never succeed.
+**Fix shipped:** the call now computes the proper Gate.io v4 HMAC-SHA512
+signature, so key verification actually works.
 
 ### 🟡 F7 — No pre-live test gate / thin tests — MED
 One example test exists. There is a `backtest` + `walk-forward`, but nothing
@@ -79,6 +83,12 @@ VITE_FUNCTION_SECRET=<same value as FUNCTION_SHARED_SECRET>
 ```
 In DRY_RUN the system uses **real** market data and makes **real** decisions, but
 sends **no** live orders — you watch it shadow-trade.
+
+**Optional hard gate — require a passing backtest before live:**
+```bash
+supabase secrets set REQUIRE_VALIDATION=1   # LIVE is forced to DRY_RUN until...
+supabase secrets set VALIDATION_PASSED=1    # ...you sign off after a good backtest
+```
 
 **Going live (a deliberate, owner-only act):** only after a backtest + a paper
 forward-test look good, and with a **least-privilege, IP-restricted** key:
@@ -104,8 +114,10 @@ Goal: **one** order path, **one** safety gate, **one** strategy interface.
    `realtime-trader`, `continuous-trader`, `rapid-trader`, `micro-scalper`,
    `tick-processor` into strategies behind that interface; keep `hyper-engine`'s
    best signals. Delete duplicates only after parity is verified.
-4. **Wire safety everywhere.** Every remaining order site → `placeOrder()` →
-   `assertOrderAllowed()`. After this, F2 is fully closed.
+4. **Wire safety everywhere.** ✅ DONE — every order site now routes through the
+   shared gate (`guardSpotOrder()` / `assertOrderAllowed()`). The remaining work
+   is to collapse the duplicate helpers into one literal `placeOrder()` once the
+   engines are merged (steps 1–3).
 5. **Persist risk state.** Daily-loss / trades-per-hour / open-positions counters
    in Postgres so caps survive restarts and are enforced across functions.
 6. **Pre-live gate.** CI/manual gate: backtest + walk-forward must pass before

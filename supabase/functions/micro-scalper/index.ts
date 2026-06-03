@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { guardSpotOrder } from "../_shared/safety.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.168.0/crypto/mod.ts";
 
@@ -56,6 +57,11 @@ const recentPrices: Map<string, number[]> = new Map();
 const lastTrades: Map<string, number> = new Map();
 
 async function gateRequest(method: string, endpoint: string, body?: unknown) {
+  // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
+  if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
+    const __sim = guardSpotOrder('micro-scalper', body as Record<string, unknown>);
+    if (__sim) return __sim;
+  }
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const bodyStr = body ? JSON.stringify(body) : '';
   const queryString = '';

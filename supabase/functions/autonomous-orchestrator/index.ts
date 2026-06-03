@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { guardSpotOrder } from "../_shared/safety.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -268,6 +269,11 @@ async function withRetry<T>(
 }
 
 async function gateRequest(endpoint: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', params: Record<string, string> = {}, body?: Record<string, unknown>): Promise<any> {
+  // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
+  if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
+    const __sim = guardSpotOrder('autonomous-orchestrator', body as Record<string, unknown>);
+    if (__sim) return __sim;
+  }
   return withRetry(async () => {
     const GATE_API_KEY = Deno.env.get('GATE_API_KEY')!;
     const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET')!;

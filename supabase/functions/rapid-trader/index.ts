@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { guardSpotOrder } from "../_shared/safety.ts";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
 
@@ -55,6 +56,11 @@ async function gateRequest(
   params: Record<string, string> = {},
   body?: Record<string, unknown>
 ) {
+  // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
+  if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
+    const __sim = guardSpotOrder('rapid-trader', body as Record<string, unknown>);
+    if (__sim) return __sim;
+  }
   const GATE_API_KEY = Deno.env.get('GATE_API_KEY');
   const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET');
   

@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { guardSpotOrder } from "../_shared/safety.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -103,6 +104,10 @@ async function executeOrder(pair: string, side: 'buy' | 'sell', amount: number, 
       text: clientOrderId,
     };
     
+    // SAFETY GATE: honour DRY_RUN / kill switch / risk caps before any live order.
+    const __sim = guardSpotOrder('tick-processor', body as unknown as Record<string, unknown>);
+    if (__sim) return { success: true, orderId: __sim.id };
+
     const bodyStr = JSON.stringify(body);
     const signature = await generateSignature('POST', endpoint, '', bodyStr, timestamp);
     

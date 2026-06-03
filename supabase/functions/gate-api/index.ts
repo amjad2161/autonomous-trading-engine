@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
 import { requireAuth, AuthError } from "../_shared/auth.ts";
+import { guardSpotOrder } from "../_shared/safety.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -75,6 +76,15 @@ serve(async (req) => {
     // SECURITY: Check against whitelist
     if (!isAllowedEndpoint(endpoint)) {
       throw new Error('Endpoint not allowed');
+    }
+
+    // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs
+    // routed through the proxy (e.g. from the dashboard).
+    if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
+      const sim = guardSpotOrder('gate-api', body as Record<string, unknown>);
+      if (sim) {
+        return new Response(JSON.stringify(sim), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
     }
 
     // SECURITY: Only use server-side credentials
