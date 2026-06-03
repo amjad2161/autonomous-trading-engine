@@ -108,7 +108,7 @@ are the remaining 📄):
 
 ### G) Hard Risk Core
 66 daily loss limit ✅ · 67 max open positions ✅ INV-04 · 68 max per-trade risk ✅ caps ·
-69 portfolio VaR guard 📄 · 70 drawdown pattern guard 🟡 · 71 slippage spike guard 🟡 `riskPosture` ·
+69 portfolio VaR guard ✅ wired (`portfolio-risk.ts`) · 70 drawdown pattern guard 🟡 · 71 slippage spike guard 🟡 `riskPosture` ·
 72 API error-burst guard 🟡 `riskPosture` · 73 WS-down guard 🟡 INV-01 · 74 liquidity-vacuum guard 🟡 · 75 kill-switch levels 🟡 `RiskPosture` ladder
 
 ### H) Controlled Learning

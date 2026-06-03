@@ -9,6 +9,7 @@ import { fetchSpotPairRules, meetsMinimums, type SpotPair } from "../_shared/gat
 import { prioritizeBy, stagedExitPlan, type ActionKind } from "../_shared/execution.ts";
 import { feeBufferOk } from "../_shared/treasury.ts";
 import { correlationGate } from "../_shared/correlation.ts";
+import { varGate } from "../_shared/portfolio-risk.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1321,6 +1322,21 @@ async function runEliteCycle(): Promise<{
     if (!__corr.ok) {
       await log('info', 'RISK', `correlation cap: ${signal.pair} (${__corr.group}) $${__corr.current.toFixed(2)}+$${size.toFixed(2)} > $${__corr.cap} — skip`);
       continue;
+    }
+
+    // Portfolio VaR guard (#69): block if aggregate worst-case risk would exceed
+    // MAX_PORTFOLIO_VAR_USDT (default unset = off).
+    const __varCap = Number(Deno.env.get('MAX_PORTFOLIO_VAR_USDT') ?? Infinity);
+    if (Number.isFinite(__varCap)) {
+      const __vg = varGate(
+        state.positions.map((p) => ({ notionalUsdt: p.value, volatilityPct: marketMap.get(p.symbol)?.volatility ?? 2 })),
+        { notionalUsdt: size, volatilityPct: market?.volatility ?? 2 },
+        __varCap,
+      );
+      if (!__vg.ok) {
+        await log('info', 'RISK', `portfolio VaR $${__vg.varUsdt.toFixed(2)} > cap $${__vg.cap} — skip ${signal.pair}`);
+        continue;
+      }
     }
 
     const amount = size / signal.price;
