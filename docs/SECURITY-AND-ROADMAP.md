@@ -1,0 +1,135 @@
+# Security, Findings & Roadmap
+
+> Produced from a full read of the codebase. Companion: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+> This document is deliberately blunt: it is meant to protect a small, real account.
+
+## 0. TL;DR
+
+The codebase is better-engineered than a typical "scam bot" — keys are
+server-side, the proxy has an endpoint allow-list, and `execute-trade` has
+genuine risk checks. But before it points at real money there are **two
+must-fix issues** (an auth hole and the absence of a unified paper/live gate)
+and a large **consolidation debt**. The first commit on this branch fixes the
+secrets hygiene, adds the unified safety layer, and closes the auth hole on the
+three most dangerous endpoints. The rest is a staged plan below.
+
+## 1. Findings (ranked)
+
+### 🔴 F1 — World-invokable functions (auth bypass) — CRITICAL
+`supabase/config.toml` sets `verify_jwt = false` on **every** function, and the
+in-function check was presence-only (`if (!authHeader)`). Anyone who learns the
+project URL could invoke `execute-trade`, `update-secrets`, `gate-api`, and the
+live traders. They never need your Gate.io keys — **the server signs with its
+own keys on their behalf.**
+**Fix shipped:** `_shared/auth.ts` `requireAuth()` enforces a shared secret
+(`FUNCTION_SHARED_SECRET` ↔ `x-function-secret`), constant-time compared, wired
+into `execute-trade`, `gate-api`, `update-secrets`. Frontend sends the header
+automatically via the Supabase client. **You must set the secret to actually
+close it** (see §2). True multi-user security = Supabase Auth + RLS + `verify_jwt=true`.
+
+### 🔴 F2 — No unified DRY_RUN / paper mode — CRITICAL for a small account
+15 functions place live `/spot/orders`. Until now there was **no master switch**
+to validate the whole system without sending real orders (only the isolated
+`backtest` simulated anything). You could not safely watch it "trade" before
+risking funds.
+**Fix shipped:** `_shared/safety.ts` introduces `TRADING_MODE` (**DRY_RUN by
+default**), a `KILL_SWITCH`, and hard risk caps. `execute-trade` now routes its
+order through the gate: all market data / slippage / liquidity / edge checks run
+against **real** data; only the final POST is withheld unless `TRADING_MODE=LIVE`.
+This is the "real data, closed firing pin" model. **Still to do:** wire the same
+gate into the other 14 order sites (§3).
+
+### 🟠 F3 — `.env` committed to git — MEDIUM
+The tracked `.env` held only Supabase project id + anon (publishable) key — those
+are public by design, so this is not a key leak — but committing env files is bad
+hygiene and `.gitignore` did not exclude them.
+**Fix shipped:** `.env` untracked, `.gitignore` updated, `.env.example` added.
+
+### 🟠 F4 — Massive engine redundancy — HIGH (maintainability + safety drift)
+5+ overlapping "mega" engines and 3+ scalpers each place orders through their own
+helper with inconsistent risk logic (`ARCHITECTURE.md` §5). A safety fix must
+currently be repeated ~10×. This is the root cause that let F2 exist.
+**Plan:** §3 — collapse to one executor + one strategy interface.
+
+### 🟡 F5 — CORS `Access-Control-Allow-Origin: *` on all functions — LOW/MED
+Acceptable for a personal tool, dangerous combined with F1. Tighten to your own
+origin once a domain is fixed.
+
+### 🟡 F6 — `update-secrets` key verification is broken — LOW
+Its verification call to `/spot/accounts` sends `KEY` + `Timestamp` but **no
+`SIGN`**, so Gate.io will reject it — the "verified" path can't actually succeed
+as written. Note for the consolidation pass; not safety-critical.
+
+### 🟡 F7 — No pre-live test gate / thin tests — MED
+One example test exists. There is a `backtest` + `walk-forward`, but nothing
+forces them to pass before live. The roadmap makes a passing backtest the gate.
+
+## 2. How to run it safely
+
+**Paper-first (default, no money at risk):**
+```bash
+# server (Supabase secrets) — do NOT commit these
+supabase secrets set TRADING_MODE=DRY_RUN
+supabase secrets set GATE_API_KEY=...        # spot + read ONLY, no withdraw/transfer
+supabase secrets set GATE_API_SECRET=...
+supabase secrets set FUNCTION_SHARED_SECRET=$(openssl rand -hex 32)
+supabase secrets set MAX_TRADE_USDT=15 MAX_DAILY_LOSS_USDT=15 MAX_OPEN_POSITIONS=2
+# frontend (.env, from .env.example) — must match the server secret
+VITE_FUNCTION_SECRET=<same value as FUNCTION_SHARED_SECRET>
+```
+In DRY_RUN the system uses **real** market data and makes **real** decisions, but
+sends **no** live orders — you watch it shadow-trade.
+
+**Going live (a deliberate, owner-only act):** only after a backtest + a paper
+forward-test look good, and with a **least-privilege, IP-restricted** key:
+```bash
+supabase secrets set TRADING_MODE=LIVE
+```
+Panic button at any time:
+```bash
+supabase secrets set KILL_SWITCH=1     # blocks all live orders immediately
+```
+
+## 3. Consolidation roadmap (staged — do NOT do recklessly)
+
+Goal: **one** order path, **one** safety gate, **one** strategy interface.
+
+1. **Central executor.** Promote `execute-trade`'s pattern into a shared
+   `placeOrder()` in `_shared/` that every engine calls. It is the *only* code
+   that POSTs `/spot/orders`, and it always goes through `_shared/safety.ts`.
+2. **Strategy interface.** Define `Strategy { scan(); decide(); }` returning
+   *intents*, not orders. Engines become strategies; the orchestrator owns the
+   single execution + risk loop.
+3. **Collapse engines.** Fold `master-brain`, `ultimate-trader`,
+   `realtime-trader`, `continuous-trader`, `rapid-trader`, `micro-scalper`,
+   `tick-processor` into strategies behind that interface; keep `hyper-engine`'s
+   best signals. Delete duplicates only after parity is verified.
+4. **Wire safety everywhere.** Every remaining order site → `placeOrder()` →
+   `assertOrderAllowed()`. After this, F2 is fully closed.
+5. **Persist risk state.** Daily-loss / trades-per-hour / open-positions counters
+   in Postgres so caps survive restarts and are enforced across functions.
+6. **Pre-live gate.** CI/manual gate: backtest + walk-forward must pass before
+   `TRADING_MODE=LIVE` is honoured (optionally enforce in code).
+7. **Tighten infra.** CORS to your origin; consider Supabase Auth + RLS +
+   `verify_jwt=true`; fix F6.
+
+## 4. Repo unification (`tradingboy` + `autonomous-trading-engine`)
+
+`tradingboy` is an empty stub. Unification = **this repo is the single canonical
+project**; `tradingboy`'s README now points here. No code is split across two
+repos. If a different split is desired (e.g. `tradingboy` = thin client,
+engine = backend), define it explicitly before moving files.
+
+## 5. Honest scope statement (carried over from prior design discussion)
+
+- This is a **validation/learning system**, not a guaranteed money-maker. A
+  positive backtest P&L is **not** proof of an edge — verify skill score /
+  calibration out-of-sample (that machinery exists in `backtest`/`walk-forward`).
+- On a ~$250–$1000 account, fees and minimums can dominate; a strategy whose edge
+  is smaller than round-trip cost must be rejected.
+- DRY_RUN-first and least-privilege keys are not limitations — they are the
+  professional path and the main thing protecting the account.
+- **Reminder:** any Gate.io API key that was ever pasted into a chat — especially
+  one with **Withdraw** permission — must be treated as compromised and
+  **revoked** in Gate.io → API Management. It does not appear anywhere in this
+  repo (verified), but revoke it at the source.

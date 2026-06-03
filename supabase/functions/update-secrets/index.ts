@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireAuth, AuthError } from "../_shared/auth.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -15,17 +16,9 @@ serve(async (req) => {
   }
 
   try {
-    // SECURITY: Validate authorization header
-    const authHeader = req.headers.get('authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({
-        success: false,
-        error: 'Authorization required',
-      }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    // SECURITY: real auth. This endpoint manages credentials — the most
+    // sensitive surface — so it should be locked down hardest in production.
+    requireAuth(req);
 
     const { apiKey, apiSecret } = await req.json();
     
@@ -75,8 +68,14 @@ serve(async (req) => {
     });
 
   } catch (error) {
+    if (error instanceof AuthError) {
+      return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
     console.error('[UPDATE-SECRETS] Error:', error);
-    
+
     return new Response(JSON.stringify({
       success: false,
       error: 'Failed to update secrets',

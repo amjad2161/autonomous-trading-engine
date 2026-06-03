@@ -5,6 +5,13 @@ import type { Database } from './types';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+// SECURITY: shared secret that authenticates calls to privileged edge functions.
+// Set VITE_FUNCTION_SECRET (frontend) to the SAME value as FUNCTION_SHARED_SECRET
+// (server). When both are set, every functions.invoke() carries it automatically,
+// closing the "anyone with the URL can invoke trading functions" hole.
+// See docs/SECURITY-AND-ROADMAP.md for the caveat about secrets in a public SPA.
+const FUNCTION_SECRET = import.meta.env.VITE_FUNCTION_SECRET as string | undefined;
+
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
@@ -13,5 +20,8 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     storage: localStorage,
     persistSession: true,
     autoRefreshToken: true,
-  }
+  },
+  global: FUNCTION_SECRET
+    ? { headers: { 'x-function-secret': FUNCTION_SECRET } }
+    : {},
 });

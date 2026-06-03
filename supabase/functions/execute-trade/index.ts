@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
+import { requireAuth, AuthError } from "../_shared/auth.ts";
+import { assertOrderAllowed, simulateOrder, safetyBanner, OrderBlockedError } from "../_shared/safety.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -37,6 +39,7 @@ interface TradeResult {
   error?: string;
   timestamp: number;
   executionTime?: number;
+  dryRun?: boolean;
 }
 
 // SECURITY: Input validation helpers
@@ -171,13 +174,41 @@ async function placeSmartOrder(
   }
 
   const priceStr = optimalPrice.toFixed(8);
+
+  // SAFETY GATE: enforce kill switch + risk caps, and honour DRY_RUN.
+  // All market data, slippage and liquidity checks above ran against REAL data;
+  // only the final order POST is withheld unless TRADING_MODE=LIVE.
+  const notionalUsdt = optimalPrice * tradeAmount;
+  const mode = assertOrderAllowed({
+    function: 'execute-trade',
+    symbol: pair,
+    side,
+    notionalUsdt,
+    price: optimalPrice,
+    amount: tradeAmount,
+  });
+  if (mode === 'DRY_RUN') {
+    const sim = simulateOrder({ function: 'execute-trade', symbol: pair, side, notionalUsdt, price: optimalPrice, amount: tradeAmount });
+    console.log(`[Trade Executor] ${sim.message}`);
+    return {
+      success: true,
+      orderId: sim.id,
+      executedAmount: amount,
+      executedPrice: priceStr,
+      slippage: 0,
+      timestamp: Date.now(),
+      executionTime: Date.now() - startTime,
+      dryRun: true,
+    } as TradeResult;
+  }
+
   const body = { currency_pair: pair, side, amount, price: priceStr, type: 'limit', time_in_force: 'ioc' };
   const payloadString = JSON.stringify(body);
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = await generateSignature('POST', endpoint, '', payloadString, timestamp, credentials.apiSecret);
 
   const headers = { 'KEY': credentials.apiKey, 'SIGN': signature, 'Timestamp': timestamp, 'Content-Type': 'application/json', 'Accept': 'application/json' };
-  console.log(`[Trade Executor] Placing smart ${side} order: ${amount} ${pair} @ ${priceStr}`);
+  console.log(`[Trade Executor] Placing LIVE smart ${side} order: ${amount} ${pair} @ ${priceStr}`);
 
   const response = await fetch(`${baseUrl}${endpoint}`, { method: 'POST', headers, body: payloadString });
   const data = await response.json();
@@ -206,11 +237,11 @@ serve(async (req) => {
   }
 
   try {
-    // SECURITY: Require authorization
-    const authHeader = req.headers.get('authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ success: false, error: 'Authorization required', timestamp: Date.now() }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    }
+    // SECURITY: real auth (shared secret when configured) instead of presence-only
+    requireAuth(req);
+
+    // Always surface the active safety posture in logs.
+    console.log(safetyBanner('execute-trade'));
 
     const request = await req.json();
     
@@ -265,6 +296,15 @@ serve(async (req) => {
     return new Response(JSON.stringify({ type: opportunityType, symbol, ...result, riskRewardRatio, targetPrice, stopLoss }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
+    // Auth failures: explicit 401 (do not leak details).
+    if (error instanceof AuthError) {
+      return new Response(JSON.stringify({ success: false, error: 'Unauthorized', timestamp: Date.now() }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+    // Risk-cap / kill-switch blocks: return the reason so the UI can show it.
+    if (error instanceof OrderBlockedError) {
+      console.warn('[Trade Executor] Order blocked:', error.code, error.message);
+      return new Response(JSON.stringify({ success: false, blocked: true, code: error.code, error: error.message, timestamp: Date.now() }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
     console.error('[Trade Executor] Error:', error);
     // SECURITY: Return generic error with correct 500 status code
     return new Response(JSON.stringify({ success: false, error: 'Trade execution failed', timestamp: Date.now() }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

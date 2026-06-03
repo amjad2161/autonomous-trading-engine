@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
+import { requireAuth, AuthError } from "../_shared/auth.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -61,17 +62,8 @@ serve(async (req) => {
   }
 
   try {
-    // SECURITY: Require authorization header
-    const authHeader = req.headers.get('authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({
-        success: false,
-        error: 'Authorization required',
-      }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    // SECURITY: real auth (shared secret when configured) instead of presence-only
+    requireAuth(req);
 
     const { endpoint, method = 'GET', params = {}, body } = await req.json() as GateRequest;
 
@@ -151,11 +143,17 @@ serve(async (req) => {
     });
 
   } catch (error) {
+    if (error instanceof AuthError) {
+      return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
     console.error('[Gate API] Error:', error);
     // SECURITY: Return fully generic error message - log details server-side only
-    return new Response(JSON.stringify({ 
-      success: false, 
-      error: 'API request failed' 
+    return new Response(JSON.stringify({
+      success: false,
+      error: 'API request failed'
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
