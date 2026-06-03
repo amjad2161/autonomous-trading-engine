@@ -94,6 +94,10 @@ export function alertDecisions(k: Kpis, t: AlertThresholds = DEFAULT_ALERTS): Al
   if (k.count >= 10 && k.profitFactor < t.minProfitFactor) {
     alerts.push({ level: "critical", message: `profit factor ${k.profitFactor} < ${t.minProfitFactor}` });
   }
+  // Negative expectancy: avg P&L per trade < 0 over a meaningful sample = no edge.
+  if (k.count >= 10 && k.avgPnlUsdt < 0) {
+    alerts.push({ level: "critical", message: `negative expectancy: avg ${k.avgPnlUsdt}/trade over ${k.count} trades` });
+  }
   if (k.maxDrawdownPct > t.maxDrawdownPct) {
     alerts.push({ level: "critical", message: `drawdown ${k.maxDrawdownPct}% > ${t.maxDrawdownPct}%` });
   }

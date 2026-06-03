@@ -47,6 +47,14 @@ Deno.test("metrics: KPIs aggregate correctly", () => {
   assertAlmostEquals(k.profitFactor, 4.29, 0.01); // 30 / 7
 });
 
+Deno.test("metrics: negative expectancy fires a critical alert over a real sample", () => {
+  // 12 trades, net negative -> avg P&L < 0 -> critical
+  const trades: TradeRow[] = Array.from({ length: 12 }, (_, i) => ({ pnlUsdt: i % 3 === 0 ? 1 : -1 }));
+  const k = computeKpis(trades);
+  assert(k.avgPnlUsdt < 0);
+  assert(alertDecisions(k).some((a) => a.level === "critical" && a.message.includes("expectancy")));
+});
+
 Deno.test("metrics: alerts fire on bad drawdown", () => {
   const trades: TradeRow[] = [{ pnlUsdt: 10 }, { pnlUsdt: -5 }, { pnlUsdt: 20 }, { pnlUsdt: -2 }];
   const k = computeKpis(trades); // drawdown 5 / 25 = 20%
