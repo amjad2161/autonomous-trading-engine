@@ -74,15 +74,15 @@ are the remaining 📄):
 
 ### A) Treasury & Wallet Control
 1 bi-dir balance recon 🟡 · 2 liquid valuation (depth, not last) 📄 · 3 auto-USDT dominance 🟡 ·
-4 fee buffer 📄 · 5 reserve vault 🟡 · 6 profit-lock vault 🟡 · 7 per-asset exposure cap ✅ ·
+4 fee buffer ✅ wired (FEE_BUFFER_USDT) · 5 reserve vault 🟡 · 6 profit-lock vault 🟡 · 7 per-asset exposure cap ✅ ·
 8 correlation exposure cap 📄 · 9 liquidity-shock sizing 🟡 · 10 dynamic sizing ✅ `scoring.positionSize()` ·
 11 auto-rebalance idle 🟡 `dust-converter` · 12 dust mgmt ✅ `dust-converter` · 13 locked-funds resolver 📄 ·
 14 wallet invariants ✅ `invariants` · 15 capital-velocity meter 📄
 
 ### B) Market Data & Hygiene
-16 WS-first 🟡 · 17 staleness detection 🟡 INV-01 · 18 clock-drift guard 📄 · 19 integrity filters 📄 ·
-20 universe auto-discovery 🟡 · 21 tick normalization 🟡 · 22 snapshot+deltas 🟡 · 23 feed redundancy 📄 ·
-24 data quality score 📄 · 25 event sourcing 📄 (Replay)
+16 WS-first ✅ (ws-telemetry) · 17 staleness detection ✅ wired (INV-01) · 18 clock-drift guard 📄 · 19 integrity filters 📄 ·
+20 universe auto-discovery 🟡 · 21 tick normalization ✅ wired · 22 snapshot+deltas 🟡 · 23 feed redundancy 📄 ·
+24 data quality score 🟡 `dataQualityScore` · 25 event sourcing ✅ wired (event_log)
 
 ### C) Features, Regimes, Toxicity
 26 spread health 🟡 · 27 depth-at-X% 📄 · 28 imbalance stability 📄 · 29 jump detector 📄 ·
@@ -101,8 +101,8 @@ are the remaining 📄):
 55 trade-frequency governor ✅ maxTradesPerHour
 
 ### F) Execution Quality
-56 priority queue (exits first) 🟡 · 57 maker-first entry 🟡 · 58 smart reprice 📄 · 59 IOC exit first 🟡 ·
-60 market fallback 🟡 · 61 partial-fill handler ✅ `order-state.ts` · 62 order state machine ✅ `order-state.ts` · 63 idempotency 🟡 clientOrderId ·
+56 priority queue (exits first) ✅ wired · 57 maker-first entry ✅ (MAKER_FIRST_ENTRIES) · 58 smart reprice 📄 · 59 IOC exit first ✅ wired ·
+60 market fallback ✅ wired (staged exit) · 61 partial-fill handler ✅ `order-state.ts` · 62 order state machine ✅ `order-state.ts` · 63 idempotency 🟡 clientOrderId ·
 64 execution health score ✅ `executionHealth()` · 65 adaptive timeouts 📄
 
 ### G) Hard Risk Core
