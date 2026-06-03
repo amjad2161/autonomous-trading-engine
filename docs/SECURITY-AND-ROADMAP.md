@@ -100,6 +100,14 @@ Panic button at any time:
 supabase secrets set KILL_SWITCH=1     # blocks all live orders immediately
 ```
 
+**Verify the safety invariants (executable proofs):**
+```bash
+deno test supabase/functions/_shared/        # asserts DRY_RUN default, kill switch,
+                                             # caps, validation gate, guardSpotOrder
+```
+These tests pin the guarantees this whole system leans on — a safety claim is
+only trustworthy if it is verifiable.
+
 ## 3. Consolidation roadmap (staged — do NOT do recklessly)
 
 Goal: **one** order path, **one** safety gate, **one** strategy interface.
