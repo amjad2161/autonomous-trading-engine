@@ -10,6 +10,7 @@ and an honest **edge detector** that must pass before going live.
 > Going LIVE is a deliberate, owner-only action with a least-privilege, IP-restricted key.
 
 ### 📚 Documentation
+- [`docs/RUN-LOCAL.md`](docs/RUN-LOCAL.md) — **install & operate it on your own computer** (recommended)
 - [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md) — what's done, what needs your runtime, how to verify
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/ARCHITECTURE-DIAGRAM.md`](docs/ARCHITECTURE-DIAGRAM.md) — system map & diagrams
 - [`docs/MASTER-SPEC.md`](docs/MASTER-SPEC.md) — full blueprint + 100-item traceability matrix
