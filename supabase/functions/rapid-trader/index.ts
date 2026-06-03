@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { gateSign } from "../_shared/gate-sign.ts";
-import { guardSpotOrder } from "../_shared/safety.ts";
+import { gateFetch } from "../_shared/gate-client.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -30,47 +29,8 @@ interface TradeResult {
   durationMs: number;
 }
 
-async function gateRequest(
-  endpoint: string,
-  method: 'GET' | 'POST' | 'DELETE' = 'GET',
-  params: Record<string, string> = {},
-  body?: Record<string, unknown>
-) {
-  // SAFETY GATE: honour DRY_RUN / kill switch / risk caps for live order POSTs.
-  if (method === 'POST' && endpoint.includes('/spot/orders') && body) {
-    const __sim = guardSpotOrder('rapid-trader', body as Record<string, unknown>);
-    if (__sim) return __sim;
-  }
-  const GATE_API_KEY = Deno.env.get('GATE_API_KEY');
-  const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET');
-  
-  if (!GATE_API_KEY || !GATE_API_SECRET) {
-    throw new Error('Gate.io API credentials not configured');
-  }
-
-  const baseUrl = 'https://api.gateio.ws';
-  const apiPrefix = '/api/v4';
-  const url = `${apiPrefix}${endpoint}`;
-  const queryString = new URLSearchParams(params).toString();
-  const fullUrl = queryString ? `${baseUrl}${url}?${queryString}` : `${baseUrl}${url}`;
-  const payloadString = body ? JSON.stringify(body) : '';
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  
-  const signature = await gateSign(method, url, queryString, payloadString, timestamp, GATE_API_SECRET);
-
-  const response = await fetch(fullUrl, {
-    method,
-    headers: {
-      'KEY': GATE_API_KEY,
-      'SIGN': signature,
-      'Timestamp': timestamp,
-      'Content-Type': 'application/json',
-    },
-    body: payloadString || undefined,
-  });
-
-  return response.json();
-}
+const gateRequest = (endpoint: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', params: Record<string, string> = {}, body?: Record<string, unknown>) =>
+  gateFetch('rapid-trader', endpoint, method, params, body);
 
 // Find pairs with tightest spreads for rapid trading
 function findRapidOpportunities(tickers: Ticker[], minVolume: number = 100000): Array<{
