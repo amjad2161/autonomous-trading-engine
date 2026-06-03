@@ -62,6 +62,7 @@ The **default tab is "Hyper"** → the system is wired to foreground the
 | `_shared/metrics.ts` | NEW | KPI aggregation (win rate, profit factor, drawdown) + alert decisions. |
 | `_shared/validation.ts` | NEW | Brier/log-loss/skill-score/calibration/Sharpe + edgeVerdict (LIVE gate). |
 | `_shared/dataset.ts` | NEW | Real Gate.io candlestick loader + up/down dataset for backtests. |
+| `_shared/gate-rules.ts` | NEW | Gate.io public mechanics: fee/VIP/GT model, order types/TIF, price-time matching, precision/minimums, rate limits, WS channels. |
 | `config` | NEW | Runtime get/set of the active mode + autopilot flags (stored in `trading_system_state.settings`). |
 
 ### 3.2 The orchestration brain
