@@ -1289,7 +1289,12 @@ async function runEliteCycle(): Promise<{
     // trading (default 0 = unchanged) — size off the tradable balance only.
     const risk = calculateDynamicRisk(state);
     const __reservePct = Math.min(90, Math.max(0, Number(Deno.env.get('RESERVE_PCT') ?? 0)));
-    const __tradable = state.currentBalance * (1 - __reservePct / 100);
+    // Profit-Lock Vault (#6): hold back PROFIT_LOCK_PCT of the day's profit from
+    // trading so gains are protected (default 0 = off).
+    const __profitLockPct = Math.min(100, Math.max(0, Number(Deno.env.get('PROFIT_LOCK_PCT') ?? 0)));
+    const __dailyProfit = Math.max(0, (state.currentBalance + state.totalExposure) - state.dayStartBalance);
+    const __locked = __dailyProfit * (__profitLockPct / 100);
+    const __tradable = Math.max(0, state.currentBalance - __locked) * (1 - __reservePct / 100);
     const riskAmount = __tradable * risk;
     let size = Math.min(riskAmount / signal.risk, __tradable * CONFIG.MAX_PER_ASSET);
 
