@@ -12,6 +12,7 @@ and an honest **edge detector** that must pass before going live.
 ### 📚 Documentation
 - [`docs/RUN-LOCAL.md`](docs/RUN-LOCAL.md) — **install & operate it on your own computer** (recommended)
 - [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md) — what's done, what needs your runtime, how to verify
+- [`docs/REQUESTS-COVERAGE.md`](docs/REQUESTS-COVERAGE.md) — every request mapped to its status
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/ARCHITECTURE-DIAGRAM.md`](docs/ARCHITECTURE-DIAGRAM.md) — system map & diagrams
 - [`docs/MASTER-SPEC.md`](docs/MASTER-SPEC.md) — full blueprint + 100-item traceability matrix
 - [`docs/INSTITUTIONAL-SPEC.md`](docs/INSTITUTIONAL-SPEC.md) — Layers 2 & 3 (invariants, governance, replay)

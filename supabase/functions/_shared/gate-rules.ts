@@ -96,6 +96,39 @@ export function meetsMinimums(notionalUsdt: number, baseAmount: number, rules: S
   return notionalUsdt >= rules.minQuoteAmount && baseAmount >= rules.minBaseAmount;
 }
 
+export interface SpotPair extends SymbolRules {
+  symbol: string;
+  tradable: boolean;
+}
+
+/**
+ * Parse Gate.io's public /spot/currency_pairs response into per-symbol rules.
+ * Pure — fed by fetchSpotPairRules() or any cached payload. Models real
+ * precision/minimums per symbol so orders are never rejected on format.
+ */
+export function parseSpotPairRules(raw: Array<Record<string, unknown>>): Record<string, SpotPair> {
+  const out: Record<string, SpotPair> = {};
+  for (const p of raw ?? []) {
+    const symbol = String(p.id ?? `${p.base}_${p.quote}`);
+    out[symbol] = {
+      symbol,
+      pricePrecision: Number(p.precision ?? 0),
+      amountPrecision: Number(p.amount_precision ?? 0),
+      minBaseAmount: Number(p.min_base_amount ?? 0),
+      minQuoteAmount: Number(p.min_quote_amount ?? 0),
+      tradable: (p.trade_status ?? "tradable") === "tradable",
+    };
+  }
+  return out;
+}
+
+/** Fetch live per-symbol trading rules (public, no key). */
+export async function fetchSpotPairRules(): Promise<Record<string, SpotPair>> {
+  const res = await fetch("https://api.gateio.ws/api/v4/spot/currency_pairs", { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`currency_pairs ${res.status}`);
+  return parseSpotPairRules((await res.json()) as Array<Record<string, unknown>>);
+}
+
 // ---------- Rate limits (public, approximate) --------------------------------
 // Respect per-endpoint limits; use a central throttler + backoff and avoid
 // cancel storms. Numbers are approximate and per-key — verify in the docs.

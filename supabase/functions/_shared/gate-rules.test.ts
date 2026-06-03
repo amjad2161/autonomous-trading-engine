@@ -2,7 +2,7 @@
 
 import { assert, assertAlmostEquals, assertEquals } from "./_test_assert.ts";
 import {
-  effectiveFeeBps, meetsMinimums, recommendedTif, roundTripFeeBps,
+  effectiveFeeBps, meetsMinimums, parseSpotPairRules, recommendedTif, roundTripFeeBps,
   SPOT_TAKER_BPS_BY_VIP, type SymbolRules,
 } from "./gate-rules.ts";
 import { netEdgePct } from "./scoring.ts";
@@ -32,6 +32,18 @@ Deno.test("minimums: enforces min notional + base amount", () => {
   assert(meetsMinimums(5, 0.001, rules));
   assert(!meetsMinimums(2, 0.001, rules));   // below min notional
   assert(!meetsMinimums(5, 0.00001, rules)); // below min base amount
+});
+
+Deno.test("symbol rules: parses /spot/currency_pairs into per-symbol precision/min", () => {
+  const rules = parseSpotPairRules([
+    { id: "BTC_USDT", base: "BTC", quote: "USDT", precision: 2, amount_precision: 6, min_base_amount: "0.0001", min_quote_amount: "3", trade_status: "tradable" },
+    { id: "FOO_USDT", base: "FOO", quote: "USDT", precision: 4, amount_precision: 2, min_base_amount: "1", min_quote_amount: "5", trade_status: "untradable" },
+  ]);
+  assertEquals(rules["BTC_USDT"].pricePrecision, 2);
+  assertEquals(rules["BTC_USDT"].amountPrecision, 6);
+  assertEquals(rules["BTC_USDT"].minQuoteAmount, 3);
+  assert(rules["BTC_USDT"].tradable);
+  assert(!rules["FOO_USDT"].tradable);
 });
 
 Deno.test("integration: Gate.io fees feed the net-edge cost model", () => {
