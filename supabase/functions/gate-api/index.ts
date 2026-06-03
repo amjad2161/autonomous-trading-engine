@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
-import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
+import { gateSign } from "../_shared/gate-sign.ts";
 import { requireAuth, AuthError } from "../_shared/auth.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
 
@@ -28,32 +27,6 @@ const ALLOWED_ENDPOINTS = [
 
 function isAllowedEndpoint(endpoint: string): boolean {
   return ALLOWED_ENDPOINTS.some(allowed => endpoint.startsWith(allowed));
-}
-
-async function sha512Hash(message: string): Promise<string> {
-  const msgBuffer = new TextEncoder().encode(message);
-  const hashBuffer = await crypto.subtle.digest('SHA-512', msgBuffer);
-  return encodeHex(new Uint8Array(hashBuffer));
-}
-
-async function generateSignature(
-  method: string,
-  url: string,
-  queryString: string,
-  payloadString: string,
-  timestamp: string,
-  secret: string
-): Promise<string> {
-  // Gate.io requires SHA-512 hash of the payload (not HMAC)
-  const hashedPayload = await sha512Hash(payloadString);
-  
-  // Build signature string according to Gate.io v4 spec
-  const signatureString = `${method}\n${url}\n${queryString}\n${hashedPayload}\n${timestamp}`;
-  
-  // Sign with HMAC-SHA512 using the secret
-  return createHmac('sha512', secret)
-    .update(signatureString)
-    .digest('hex');
 }
 
 serve(async (req) => {
@@ -111,7 +84,7 @@ serve(async (req) => {
     
     // Generate timestamp and signature
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = await generateSignature(
+    const signature = await gateSign(
       method,
       url,
       queryString,
