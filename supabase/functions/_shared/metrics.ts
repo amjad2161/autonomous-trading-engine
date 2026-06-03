@@ -50,7 +50,11 @@ export function computeKpis(trades: TradeRow[]): Kpis {
     if (t.slippagePct !== undefined) { slipSum += t.slippagePct; slipN++; }
   }
   const dd = maxDrawdown(cum);
-  const peak = Math.max(1, ...cum.map((c) => Math.abs(c)), Math.abs(total));
+  // Reference scale for % drawdown, computed without spreading a large array
+  // (Math.max(...bigArray) can blow the call stack / arg limit).
+  let peak = 1;
+  for (const c of cum) { const a = Math.abs(c); if (a > peak) peak = a; }
+  if (Math.abs(total) > peak) peak = Math.abs(total);
   return {
     count,
     wins,

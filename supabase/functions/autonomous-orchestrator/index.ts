@@ -10,6 +10,7 @@ import { prioritizeBy, stagedExitPlan, type ActionKind } from "../_shared/execut
 import { feeBufferOk } from "../_shared/treasury.ts";
 import { correlationGate } from "../_shared/correlation.ts";
 import { varGate } from "../_shared/portfolio-risk.ts";
+import { evaluateEntryGate } from "../_shared/entry-gate.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1273,7 +1274,14 @@ async function runEliteCycle(): Promise<{
   if (__belowFeeBuffer) {
     await log('warn', 'RISK', `🛑 USDT $${state.currentBalance.toFixed(2)} below fee buffer $${__feeBufferUsdt} — entries blocked`);
   }
-  const __entriesBlocked = !cfg.autopilot || __inv.blockEntries || postureBlocksEntries(__posture.posture) || __belowFeeBuffer;
+  // Consolidated, unit-tested entry decision (behaviour-preserving).
+  const __gate = evaluateEntryGate({
+    autopilot: cfg.autopilot,
+    invariantsBlocked: __inv.blockEntries,
+    postureBlocks: postureBlocksEntries(__posture.posture),
+    belowFeeBuffer: __belowFeeBuffer,
+  });
+  const __entriesBlocked = !__gate.allowed;
 
   const maxEntries = state.systemState === 'DEFENSE' ? 1 : (state.systemState === 'TURBO' ? 3 : 2);
 
