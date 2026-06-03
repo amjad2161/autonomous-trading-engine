@@ -8,6 +8,7 @@ import { normalizeAmount, normalizePrice } from "../_shared/market-data.ts";
 import { fetchSpotPairRules, meetsMinimums, type SpotPair } from "../_shared/gate-rules.ts";
 import { prioritizeBy, stagedExitPlan, type ActionKind } from "../_shared/execution.ts";
 import { feeBufferOk } from "../_shared/treasury.ts";
+import { correlationGate } from "../_shared/correlation.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1307,6 +1308,18 @@ async function runEliteCycle(): Promise<{
       continue;
     }
     
+    // Correlation cap (#8/#53): don't stack the same risk — block if this entry
+    // would push the correlated group's exposure past its cap.
+    const __grpCap = Number(Deno.env.get('MAX_GROUP_EXPOSURE_USDT') ?? cfg.maxTradeUsdt * 3);
+    const __corr = correlationGate(
+      state.positions.map((p) => ({ symbol: p.symbol, notionalUsdt: p.value })),
+      signal.pair, size, __grpCap,
+    );
+    if (!__corr.ok) {
+      await log('info', 'RISK', `correlation cap: ${signal.pair} (${__corr.group}) $${__corr.current.toFixed(2)}+$${size.toFixed(2)} > $${__corr.cap} — skip`);
+      continue;
+    }
+
     const amount = size / signal.price;
     const clientOrderId = generateClientOrderId();
     

@@ -75,7 +75,7 @@ are the remaining 📄):
 ### A) Treasury & Wallet Control
 1 bi-dir balance recon 🟡 · 2 liquid valuation (depth, not last) 📄 · 3 auto-USDT dominance 🟡 ·
 4 fee buffer ✅ wired (FEE_BUFFER_USDT) · 5 reserve vault 🟡 · 6 profit-lock vault 🟡 · 7 per-asset exposure cap ✅ ·
-8 correlation exposure cap 📄 · 9 liquidity-shock sizing 🟡 · 10 dynamic sizing ✅ `scoring.positionSize()` ·
+8 correlation exposure cap ✅ wired (`correlation.ts`) · 9 liquidity-shock sizing 🟡 · 10 dynamic sizing ✅ `scoring.positionSize()` ·
 11 auto-rebalance idle 🟡 `dust-converter` · 12 dust mgmt ✅ `dust-converter` · 13 locked-funds resolver 📄 ·
 14 wallet invariants ✅ `invariants` · 15 capital-velocity meter 📄
 
@@ -97,7 +97,7 @@ are the remaining 📄):
 ### E) Scoring, Planning, Autonomy
 46 unified net-edge score ✅ `scoring.scoreOpportunity()` · 47 risk-weighted allocation 🟡 · 48 multi-horizon brain 📄 ·
 49 pre-trade exit plan 🟡 `execute-trade` · 50 scenario micro-sim 📄 · 51 regime switcher ✅ profiles/personality ·
-52 opportunity budgeting 🟡 caps · 53 correlation selection 📄 · 54 cooldown per symbol ✅ `scoring`/profiles ·
+52 opportunity budgeting 🟡 caps · 53 correlation selection ✅ wired (`correlation.ts`) · 54 cooldown per symbol ✅ `scoring`/profiles ·
 55 trade-frequency governor ✅ maxTradesPerHour
 
 ### F) Execution Quality
