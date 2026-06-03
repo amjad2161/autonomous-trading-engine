@@ -50,6 +50,9 @@ The **default tab is "Hyper"** → the system is wired to foreground the
 | `_shared/safety.ts` | NEW | Single source of truth: DRY_RUN/LIVE, kill switch, risk caps, order gate. |
 | `_shared/auth.ts` | NEW | Shared-secret auth guard (replaces presence-only checks). |
 | `_shared/profiles.ts` | NEW | Trading modes (Conservative/Balanced/Aggressive/Custom/Auto) + adaptive engine. |
+| `_shared/invariants.ts` | NEW | Formal risk invariants (INV-01..05) — system-state gate on new entries. |
+| `_shared/health.ts` | NEW | Real-time KPIs → risk posture, execution health, toxicity, personality, capital routing, latency. |
+| `_shared/scoring.ts` | NEW | Net-edge cost model, dynamic sizing, opportunity scoring, expiry, cooldown. |
 | `config` | NEW | Runtime get/set of the active mode + autopilot flags (stored in `trading_system_state.settings`). |
 
 ### 3.2 The orchestration brain

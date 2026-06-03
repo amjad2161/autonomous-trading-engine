@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { guardSpotOrder } from "../_shared/safety.ts";
+import { guardSpotOrder, getRiskCaps } from "../_shared/safety.ts";
 import { resolveConfig, type MarketRegime } from "../_shared/profiles.ts";
+import { evaluateInvariants, invariantReason } from "../_shared/invariants.ts";
+import { riskPosture, postureBlocksEntries } from "../_shared/health.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1127,11 +1129,35 @@ async function runEliteCycle(): Promise<{
     await log('info', 'ENGINE', `🎚️ Mode ${cfg.profile}: maxTrade $${cfg.maxTradeUsdt}, edge≥${cfg.minEdgePct}% — ${cfg.rationale}`);
   }
 
+  // ===== Spec v1.1 Layers 2&3: formal invariants + real-time risk posture =====
+  // Pure governance gate. Exits always allowed; only NEW entries are blocked.
+  const __caps = getRiskCaps();
+  const __openPos = Array.isArray((state as unknown as { positions?: unknown[] }).positions)
+    ? (state as unknown as { positions: unknown[] }).positions.length
+    : undefined;
+  const __inv = evaluateInvariants({
+    dailyPnlUsdt: state.dailyPnLPercent !== undefined ? state.currentBalance * state.dailyPnLPercent : undefined,
+    dailyLossCapUsdt: __caps.maxDailyLossUsdt,
+    openPositions: __openPos,
+    maxOpenPositions: cfg.maxOpenPositions,
+  });
+  const __posture = riskPosture({
+    dailyDrawdownPct: __regime.drawdownPct,
+    errorRatePerMin: (state as unknown as { apiFailures?: number }).apiFailures,
+  });
+  if (__inv.blockEntries) {
+    await log('warn', 'RISK', `🛑 Invariant breach — entries blocked: ${invariantReason(__inv)}`);
+  }
+  if (postureBlocksEntries(__posture.posture)) {
+    await log('warn', 'RISK', `🛑 Risk posture ${__posture.posture} — entries blocked: ${__posture.reasons.join(', ')}`);
+  }
+  const __entriesBlocked = !cfg.autopilot || __inv.blockEntries || postureBlocksEntries(__posture.posture);
+
   const maxEntries = state.systemState === 'DEFENSE' ? 1 : (state.systemState === 'TURBO' ? 3 : 2);
 
   for (const signal of signals.slice(0, maxEntries)) {
-    // AUTOPILOT master switch: no new entries while autopilot is OFF.
-    if (!cfg.autopilot) break;
+    // AUTOPILOT + governance gate: no new entries when blocked (exits still run).
+    if (__entriesBlocked) break;
 
     // 🔥 ULTRA AGGRESSIVE: Disabled correlation check to allow more entries
     // const correlatedCount = countCorrelatedPositions(signal.pair, state.positions);
