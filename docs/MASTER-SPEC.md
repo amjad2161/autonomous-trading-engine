@@ -62,6 +62,9 @@ are the remaining 📄):
 | `scoring.ts` | net-edge cost model + sizing + score + expiry + cooldown; #10, #34, #41, #46–47, #54 |
 | `kelly.ts` | quant sizing: expectancy, fractional-Kelly, risk-of-ruin, Sortino; #10, #46, #68 |
 | `funding-arb.ts` | delta-neutral funding/basis carry strategy (capital-agnostic); the most viable retail method; #36, #40 |
+| `funding-scanner.ts` | rank perps by net carry, emit OPEN candidates; #42, #46–47 |
+| `funding-backtest.ts` | carry truth-detector: net-of-cost P&L, % time positive, Sharpe, verdict |
+| `market-making.ts` | spread-capture quoting + inventory skew; viable only if spread > round-trip fees; #37 |
 | `market-data.ts` | hygiene + microstructure; #16–29, #35 |
 | `treasury.ts` | capital management; #1–13, #15 |
 | `execution.ts` + `order-state.ts` | exits-first queue, staging, FSM; #56–65 |
