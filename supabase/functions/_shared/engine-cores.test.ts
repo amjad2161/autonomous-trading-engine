@@ -4,7 +4,7 @@
 import { assert, assertAlmostEquals, assertEquals } from "./_test_assert.ts";
 import {
   dataQualityScore, depthWithinPct, estimateSlippagePct, isCrossed,
-  isLeveragedToken, normalizeAmount, normalizePrice, spreadBps,
+  isLeveragedToken, liquidationValueUsdt, normalizeAmount, normalizePrice, spreadBps,
 } from "./market-data.ts";
 import {
   dynamicUsdtTargetPct, exposureRoomUsdt, feeBufferOk, liquidityShockSize,
@@ -45,6 +45,14 @@ Deno.test("md: quality score + normalization + leveraged filter", () => {
   assert(isLeveragedToken("BTC3L_USDT"));
   assert(isLeveragedToken("BTCUP_USDT"));
   assert(!isLeveragedToken("BTC_USDT"));
+});
+
+Deno.test("md: liquidation value walks the bids (not last price)", () => {
+  const bids: [number, number][] = [[100, 1], [99, 2]];
+  // sell 2 base: 1@100 + 1@99 = 199
+  assertEquals(liquidationValueUsdt(2, bids), 199);
+  // sell 5 base: book only absorbs 3 -> 100 + 198 = 298 (conservative)
+  assertEquals(liquidationValueUsdt(5, bids), 100 + 99 * 2);
 });
 
 // ---------- treasury ----------

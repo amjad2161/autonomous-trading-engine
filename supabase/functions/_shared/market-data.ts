@@ -80,6 +80,24 @@ export function dataQualityScore(input: { ageMs: number; staleMs: number; spread
   return clamp01(0.5 * freshness + 0.5 * spreadQ);
 }
 
+/**
+ * Liquidation value (#2): the USDT you'd ACTUALLY get selling `baseAmount` into
+ * the bid book — walk the bids, not the last price. Conservative: if the book
+ * can't absorb it all, returns only the realizable proceeds.
+ */
+export function liquidationValueUsdt(baseAmount: number, bids: Level[]): number {
+  if (!(baseAmount > 0)) return 0;
+  let remaining = baseAmount;
+  let proceeds = 0;
+  for (const [price, amt] of [...bids].sort((a, b) => b[0] - a[0])) {
+    const take = Math.min(Math.max(0, amt), remaining);
+    proceeds += take * price;
+    remaining -= take;
+    if (remaining <= 0) break;
+  }
+  return proceeds;
+}
+
 /** Round a quantity DOWN to the symbol's amount precision (#21). */
 export function normalizeAmount(amount: number, precision: number): number {
   if (precision < 0) return amount;
