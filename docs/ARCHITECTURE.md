@@ -26,7 +26,8 @@ A single-user, browser-based **autonomous crypto-trading dashboard** for
 
 | Area | Files | Role |
 |---|---|---|
-| Entry | `main.tsx`, `App.tsx`, `pages/Index.tsx` | Boots the app; `Index.tsx` renders the dashboard as 7 tabs: **Hyper / Control / Analytics / Scalping / History / Backtest / Settings**. |
+| Entry | `main.tsx`, `App.tsx`, `pages/Index.tsx` | Boots the app; `Index.tsx` renders the dashboard as tabs: **Hyper / Autopilot / Control / Analytics / Scalping / History / Backtest / Settings**. |
+| Autopilot / modes | `components/dashboard/TradingModePanel.tsx`, `hooks/useTradingConfig.ts` | Mode selector + autopilot/adaptive control; reads/writes the `config` function. |
 | Gate / onboarding | `components/CredentialsScreen.tsx`, `hooks/useCredentials.ts` | "Cloud-secured" connection test — credentials live server-side; the screen only verifies the server is configured. |
 | Dashboard panels | `components/dashboard/*` (22 panels) | Treasury, Positions, RiskControl, Opportunities, Backtest, ContinuousTrading, Autonomous control, TradingChat, Performance, CronJob setup, TickScalping, MasterControl, AdvancedAnalytics, TradeHistory, **HyperEngine**, Settings, TradingStats, RapidTrader, Goals, MarketOverview, ActivityLog. |
 | Hooks (state/logic) | `hooks/use*.ts` | Thin clients over the edge functions: `useAutonomousSystem`, `useGateApi`, `useGateWebSocket`, `useRapidTrader`, `useTickScalping`, `useContinuousTrading`, `useAutoExecute`, `useBacktest`, `useWalkForward`, `useOptimization`, `useOpportunityScanner`. |
@@ -48,6 +49,8 @@ The **default tab is "Hyper"** → the system is wired to foreground the
 | `cron-trigger` | 103 | External cron entrypoint. |
 | `_shared/safety.ts` | NEW | Single source of truth: DRY_RUN/LIVE, kill switch, risk caps, order gate. |
 | `_shared/auth.ts` | NEW | Shared-secret auth guard (replaces presence-only checks). |
+| `_shared/profiles.ts` | NEW | Trading modes (Conservative/Balanced/Aggressive/Custom/Auto) + adaptive engine. |
+| `config` | NEW | Runtime get/set of the active mode + autopilot flags (stored in `trading_system_state.settings`). |
 
 ### 3.2 The orchestration brain
 

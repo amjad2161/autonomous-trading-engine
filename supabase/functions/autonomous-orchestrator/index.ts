@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
+import { resolveConfig, type MarketRegime } from "../_shared/profiles.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1107,24 +1108,48 @@ async function runEliteCycle(): Promise<{
   // ENTRIES
   const signals = validateSignals(markets, state);
   let entryCount = 0;
-  
+
+  // ===== AUTOPILOT MODE: resolve the active trading profile (the aggression knob) =====
+  // Controls aggression only; the hard safety floor (caps/kill/DRY_RUN) is enforced
+  // separately at the order site. Default autopilot=false → no new entries until the
+  // user turns Autopilot ON in the dashboard (two-level control with is_active).
+  const __cfgState = await getDBState();
+  const __regime: MarketRegime = {
+    volatilityPct: 2,
+    trendStrength: 0,
+    balanceUsdt: state.currentBalance,
+    drawdownPct: state.dailyPnLPercent < 0 ? -state.dailyPnLPercent * 100 : 0,
+  };
+  const cfg = resolveConfig((__cfgState?.settings ?? {}) as Record<string, unknown>, __regime);
+  if (!cfg.autopilot) {
+    await log('info', 'ENGINE', `⏸️ Autopilot OFF (mode ${cfg.profile}) — skipping new entries`);
+  } else {
+    await log('info', 'ENGINE', `🎚️ Mode ${cfg.profile}: maxTrade $${cfg.maxTradeUsdt}, edge≥${cfg.minEdgePct}% — ${cfg.rationale}`);
+  }
+
   const maxEntries = state.systemState === 'DEFENSE' ? 1 : (state.systemState === 'TURBO' ? 3 : 2);
-  
+
   for (const signal of signals.slice(0, maxEntries)) {
+    // AUTOPILOT master switch: no new entries while autopilot is OFF.
+    if (!cfg.autopilot) break;
+
     // 🔥 ULTRA AGGRESSIVE: Disabled correlation check to allow more entries
     // const correlatedCount = countCorrelatedPositions(signal.pair, state.positions);
     // if (correlatedCount >= CONFIG.MAX_CORRELATED_POSITIONS) continue;
-    
+
     // Calculate base risk
     const risk = calculateDynamicRisk(state);
     const riskAmount = state.currentBalance * risk;
     let size = Math.min(riskAmount / signal.risk, state.currentBalance * CONFIG.MAX_PER_ASSET);
-    
+
     // 🆕 Apply volatility-adjusted sizing
     const market = marketMap.get(signal.pair);
     if (market) {
       size = calculateVolatilityAdjustedSize(size, market.volatility);
     }
+
+    // AUTOPILOT profile: cap order notional by the selected mode's maxTradeUsdt.
+    size = Math.min(size, cfg.maxTradeUsdt);
     
     console.log(`[ENTRY] ${signal.pair} | Balance: $${state.currentBalance.toFixed(2)} | Risk: ${(risk*100).toFixed(1)}% | Size: $${size.toFixed(2)}`);
     

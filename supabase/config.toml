@@ -65,3 +65,6 @@ verify_jwt = false
 
 [functions.rapid-trader]
 verify_jwt = false
+
+[functions.config]
+verify_jwt = false

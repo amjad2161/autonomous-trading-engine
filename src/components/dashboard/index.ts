@@ -20,3 +20,4 @@ export { SettingsPanel } from "./SettingsPanel";
 export { TradingStatsPanel } from "./TradingStatsPanel";
 export { RapidTraderPanel } from "./RapidTraderPanel";
 export { GoalsPanel } from "./GoalsPanel";
+export { TradingModePanel } from "./TradingModePanel";

@@ -20,12 +20,13 @@ import {
   SettingsPanel,
   TradingStatsPanel,
   RapidTraderPanel,
-  GoalsPanel
+  GoalsPanel,
+  TradingModePanel
 } from "@/components/dashboard";
 import { useCredentials } from "@/hooks/useCredentials";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Server, Zap, Brain, BarChart3, Settings, FlaskConical, Rocket } from "lucide-react";
+import { Server, Zap, Brain, BarChart3, Settings, FlaskConical, Rocket, Gauge } from "lucide-react";
 
 const Index = () => {
   const { isLoading, isServerMode } = useCredentials();
@@ -50,6 +51,10 @@ const Index = () => {
             <TabsTrigger value="hyper" className="flex items-center gap-1">
               <Rocket className="h-3 w-3" />
               Hyper
+            </TabsTrigger>
+            <TabsTrigger value="autopilot" className="flex items-center gap-1">
+              <Gauge className="h-3 w-3" />
+              Autopilot
             </TabsTrigger>
             <TabsTrigger value="control" className="flex items-center gap-1">
               <Settings className="h-3 w-3" />
@@ -116,6 +121,27 @@ const Index = () => {
           </div>
         </TabsContent>
         
+        {/* Autopilot / Trading Mode Tab */}
+        <TabsContent value="autopilot" className="mt-0">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-4">
+              <TradingModePanel />
+            </div>
+            <div className="lg:col-span-4">
+              <RiskControlPanel />
+            </div>
+            <div className="lg:col-span-4">
+              <TradingStatsPanel />
+            </div>
+            <div className="lg:col-span-6 h-[350px]">
+              <PositionsPanel />
+            </div>
+            <div className="lg:col-span-6 h-[350px]">
+              <ActivityLog />
+            </div>
+          </div>
+        </TabsContent>
+
         {/* Control Panel Tab */}
         <TabsContent value="control" className="mt-0">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
