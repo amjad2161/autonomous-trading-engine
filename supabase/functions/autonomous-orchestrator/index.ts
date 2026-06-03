@@ -1284,10 +1284,13 @@ async function runEliteCycle(): Promise<{
     // const correlatedCount = countCorrelatedPositions(signal.pair, state.positions);
     // if (correlatedCount >= CONFIG.MAX_CORRELATED_POSITIONS) continue;
 
-    // Calculate base risk
+    // Calculate base risk. Reserve Vault (#5): hold RESERVE_PCT of equity out of
+    // trading (default 0 = unchanged) — size off the tradable balance only.
     const risk = calculateDynamicRisk(state);
-    const riskAmount = state.currentBalance * risk;
-    let size = Math.min(riskAmount / signal.risk, state.currentBalance * CONFIG.MAX_PER_ASSET);
+    const __reservePct = Math.min(90, Math.max(0, Number(Deno.env.get('RESERVE_PCT') ?? 0)));
+    const __tradable = state.currentBalance * (1 - __reservePct / 100);
+    const riskAmount = __tradable * risk;
+    let size = Math.min(riskAmount / signal.risk, __tradable * CONFIG.MAX_PER_ASSET);
 
     // 🆕 Apply volatility-adjusted sizing
     const market = marketMap.get(signal.pair);
