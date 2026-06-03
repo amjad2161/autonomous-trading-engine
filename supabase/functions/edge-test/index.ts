@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { requireAuth, AuthError } from "../_shared/auth.ts";
 import { fetchGateCandles, buildUpDownDataset } from "../_shared/dataset.ts";
-import { edgeVerdict, logLoss, sharpe } from "../_shared/validation.ts";
+import { edgeVerdict, logLoss, sharpe, walkForwardReport } from "../_shared/validation.ts";
 import { candlesToReturns } from "../_shared/dataset.ts";
 
 // =============================================================================
@@ -40,18 +40,30 @@ serve(async (req) => {
         const candles = await fetchGateCandles(pair, interval, limit);
         const ds = buildUpDownDataset(candles);
         const verdict = edgeVerdict(ds.momentumPreds, ds.marketPreds, ds.outcomes, minSkill);
+        const wf = walkForwardReport(ds.momentumPreds, ds.marketPreds, ds.outcomes, 5, minSkill);
         const rets = candlesToReturns(candles);
+        // Honest gate: an edge counts only if it's positive in-sample AND
+        // consistent out-of-sample across walk-forward folds.
+        const hasEdge = verdict.hasEdge && wf.consistentEdge;
         results.push({
           pair,
           samples: ds.outcomes.length,
-          hasEdge: verdict.hasEdge,
-          skill: Number(verdict.skill.toFixed(4)),
+          hasEdge,
+          inSampleSkill: Number(verdict.skill.toFixed(4)),
+          walkForward: {
+            meanSkill: Number(wf.meanSkill.toFixed(4)),
+            foldsWithEdge: wf.foldsWithEdge,
+            totalFolds: wf.totalFolds,
+            consistentEdge: wf.consistentEdge,
+          },
           modelBrier: Number(verdict.modelBrier.toFixed(4)),
           marketBrier: Number(verdict.marketBrier.toFixed(4)),
           modelLogLoss: Number(logLoss(ds.momentumPreds, ds.outcomes).toFixed(4)),
           marketLogLoss: Number(logLoss(ds.marketPreds, ds.outcomes).toFixed(4)),
           buyHoldSharpe: Number(sharpe(rets).toFixed(4)),
-          note: verdict.reason,
+          note: hasEdge
+            ? `in-sample skill ${verdict.skill.toFixed(4)} AND consistent OOS (${wf.foldsWithEdge}/${wf.totalFolds} folds)`
+            : `no reliable edge: ${verdict.reason}; OOS ${wf.foldsWithEdge}/${wf.totalFolds} folds`,
         });
       } catch (e) {
         results.push({ pair, error: e instanceof Error ? e.message : "fetch failed" });

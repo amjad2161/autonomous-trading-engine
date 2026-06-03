@@ -2,7 +2,7 @@
 //   deno test supabase/functions/_shared/
 
 import { assert, assertAlmostEquals, assertEquals } from "./_test_assert.ts";
-import { brierScore, calibration, edgeVerdict, logLoss, sharpe, skillScore } from "./validation.ts";
+import { brierScore, calibration, edgeVerdict, logLoss, sharpe, skillScore, walkForwardReport } from "./validation.ts";
 import { buildUpDownDataset, candlesToReturns, type Candle } from "./dataset.ts";
 
 Deno.test("brier: perfect predictions = 0, coinflip on certain outcome = 0.25", () => {
@@ -37,6 +37,26 @@ Deno.test("calibration returns the requested number of bins", () => {
 Deno.test("sharpe is 0 for <2 points, positive for steady gains", () => {
   assertEquals(sharpe([0.01]), 0);
   assert(sharpe([0.01, 0.012, 0.009, 0.011]) > 0);
+});
+
+Deno.test("walk-forward: consistent edge across folds when model beats market", () => {
+  const outcomes: number[] = [];
+  for (let i = 0; i < 15; i++) { outcomes.push(1, 0); } // 30 samples
+  const model = outcomes.map((o) => (o ? 0.9 : 0.1));   // confident-correct
+  const market = outcomes.map(() => 0.5);
+  const wf = walkForwardReport(model, market, outcomes, 5);
+  assert(wf.totalFolds >= 4);
+  assert(wf.consistentEdge);
+  assertEquals(wf.foldsWithEdge, wf.totalFolds);
+});
+
+Deno.test("walk-forward: no consistent edge when model == market", () => {
+  const outcomes: number[] = [];
+  for (let i = 0; i < 15; i++) { outcomes.push(1, 0); }
+  const market = outcomes.map(() => 0.5);
+  const wf = walkForwardReport(market, market, outcomes, 5);
+  assert(!wf.consistentEdge);
+  assertEquals(wf.foldsWithEdge, 0);
 });
 
 Deno.test("dataset: returns + up/down labels from candles (pure)", () => {

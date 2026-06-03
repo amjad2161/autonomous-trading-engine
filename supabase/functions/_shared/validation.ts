@@ -79,6 +79,57 @@ export function sharpe(returns: number[]): number {
   return sd > 0 ? mean / sd : 0;
 }
 
+export interface WalkForwardFold {
+  n: number;
+  skill: number;
+  modelBrier: number;
+  marketBrier: number;
+}
+
+export interface WalkForwardReport {
+  folds: WalkForwardFold[];
+  meanSkill: number;
+  foldsWithEdge: number;
+  totalFolds: number;
+  /** Edge only if it beats the market in a MAJORITY of out-of-sample windows. */
+  consistentEdge: boolean;
+}
+
+/**
+ * Walk-forward / out-of-sample evaluation: split the timeline into contiguous
+ * folds and score each independently. A real edge should persist across windows
+ * — a single lucky window does not count. This is the backtest-trap defense.
+ */
+export function walkForwardReport(
+  modelPreds: number[],
+  marketPreds: number[],
+  outcomes: number[],
+  folds = 5,
+  minSkill = 0.01,
+  minFoldSize = 5,
+): WalkForwardReport {
+  const n = Math.min(modelPreds.length, marketPreds.length, outcomes.length);
+  const k = Math.max(1, Math.min(folds, Math.floor(n / minFoldSize) || 1));
+  const size = Math.floor(n / k);
+  const out: WalkForwardFold[] = [];
+  for (let f = 0; f < k; f++) {
+    const start = f * size;
+    const end = f === k - 1 ? n : start + size;
+    const mp = modelPreds.slice(start, end);
+    const rp = marketPreds.slice(start, end);
+    const oc = outcomes.slice(start, end);
+    if (oc.length < minFoldSize) continue;
+    const mb = brierScore(mp, oc);
+    const rb = brierScore(rp, oc);
+    out.push({ n: oc.length, skill: skillScore(mb, rb), modelBrier: mb, marketBrier: rb });
+  }
+  const totalFolds = out.length;
+  const foldsWithEdge = out.filter((x) => x.skill >= minSkill).length;
+  const meanSkill = totalFolds ? out.reduce((a, b) => a + b.skill, 0) / totalFolds : 0;
+  const consistentEdge = totalFolds > 0 && foldsWithEdge / totalFolds >= 0.6 && meanSkill >= minSkill;
+  return { folds: out, meanSkill, foldsWithEdge, totalFolds, consistentEdge };
+}
+
 export interface EdgeVerdict {
   hasEdge: boolean;
   skill: number;
