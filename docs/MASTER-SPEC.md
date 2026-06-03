@@ -85,7 +85,7 @@ are the remaining 📄):
 24 data quality score 🟡 `dataQualityScore` · 25 event sourcing ✅ wired (event_log)
 
 ### C) Features, Regimes, Toxicity
-26 spread health 🟡 · 27 depth-at-X% 📄 · 28 imbalance stability 📄 · 29 jump detector 📄 ·
+26 spread health 🟡 · 27 depth-at-X% ✅ `market-data.depthWithinPct` · 28 imbalance stability ✅ `microstructure.ts` · 29 jump detector ✅ `microstructure.ts` ·
 30 vol regime classifier 🟡 · 31 toxicity score ✅ `toxicityScore()` · 32 session awareness 📄 ·
 33 market stress index 🟡 `riskPosture` · 34 conservative cost model ✅ `scoring.estimatedCosts()` · 35 latency penalty ✅ `scoring`/`latencyScore`
 
