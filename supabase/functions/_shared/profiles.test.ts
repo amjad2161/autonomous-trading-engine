@@ -4,7 +4,7 @@
 // Executable proof that the mode selector behaves — and, crucially, that even
 // the AGGRESSIVE / CUSTOM / AUTO modes stay inside the hard bounds.
 
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "./_test_assert.ts";
 import {
   adaptiveParams,
   clampParams,

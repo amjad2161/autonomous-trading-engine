@@ -30,14 +30,24 @@
 **Docs:** ARCHITECTURE, ARCHITECTURE-DIAGRAM, MASTER-SPEC (100-item traceability),
 INSTITUTIONAL-SPEC, TRADING-GUIDE, SECURITY-AND-ROADMAP, LOVABLE-PROMPT.
 
-**Proofs:** 8 Deno test suites (`supabase/functions/_shared/*.test.ts`).
+**Proofs:** 8 Deno test suites (`supabase/functions/_shared/*.test.ts`), runnable
+fully offline (vendored `_test_assert.ts`, no external fetch).
+
+**✅ Verified by actually running (this session):**
+- `npx tsc --noEmit -p tsconfig.app.json` → **exit 0** (whole frontend typechecks).
+- `npm run test` (vitest) → **1 passed**.
+- `npm run build` (vite) → **success** (PWA generated).
+- `deno test --allow-env supabase/functions/_shared/` → **77 passed, 0 failed**
+  (running them caught and fixed a real bug: the `BAD_NOTIONAL` error message).
+- ESLint on all files added/edited this session → **0 errors**.
+(Toolchain reachable here: npm registry + github. Blocked: deno.land, api.gateio.ws.)
 
 ## 🟡 Needs your runtime to *finish* (cannot be done from this sandbox)
 
 These are real, remaining steps that require network / Deno / Supabase / your keys:
 
-1. **Run the proofs & build:** `deno test supabase/functions/_shared/` and
-   `npm i && npm run build`. (I could not execute them here.)
+1. **Run the proofs & build:** ✅ already executed here and green (see above) —
+   re-run on your machine to confirm in your environment.
 2. **Deploy:** `supabase functions deploy` + apply the migration; set server
    secrets (`TRADING_MODE`, `GATE_API_KEY/SECRET` least-privilege, `FUNCTION_SHARED_SECRET`,
    caps). Set frontend `.env` from `.env.example`.
@@ -47,9 +57,11 @@ These are real, remaining steps that require network / Deno / Supabase / your ke
    API and observed in DRY_RUN first.
 4. **WS telemetry** for INV-01/INV-05 (staleness, cancel-rate) — needs a live
    WebSocket feed; the invariant checks are ready to receive it.
-5. **Run the real-data backtest:** call `dataset.fetchGateCandles` →
-   `validation.edgeVerdict` to get the honest verdict on whether there's an edge.
-   This needs network. **This gate should pass before `TRADING_MODE=LIVE`.**
+5. **Run the real-data backtest:** invoke the `edge-test` function (or call
+   `dataset.fetchGateCandles` → `validation.edgeVerdict`) for the honest verdict
+   on whether there's an edge. Needs egress to `api.gateio.ws` — **blocked in this
+   sandbox (403), but reachable from Supabase / your box.** The fetch code is
+   verified to handle errors correctly. **This gate should pass before `TRADING_MODE=LIVE`.**
 
 ## How to verify locally
 

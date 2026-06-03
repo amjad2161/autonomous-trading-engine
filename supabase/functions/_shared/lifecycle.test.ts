@@ -1,7 +1,7 @@
 // Deno tests for the order state machine + AI governance.
 //   deno test supabase/functions/_shared/
 
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "./_test_assert.ts";
 import { applyOrderEvent, isTerminal, nextOrderState, remainingQty, type OrderRecord } from "./order-state.ts";
 import { canPromote, passesAcceptance, shouldRollback, type KpiSnapshot } from "./governance.ts";
 
@@ -34,7 +34,7 @@ Deno.test("order: partial fills accumulate, full fill completes", () => {
 });
 
 Deno.test("order: terminal states ignore further events (idempotent)", () => {
-  let r = applyOrderEvent(applyOrderEvent(fresh(), "ack"), "fill");
+  const r = applyOrderEvent(applyOrderEvent(fresh(), "ack"), "fill");
   assert(isTerminal(r.state));
   const after = applyOrderEvent(r, "cancel");
   assertEquals(after.state, "FILLED");

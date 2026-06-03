@@ -1,7 +1,7 @@
 // Deno tests for market-data, treasury and execution cores.
 //   deno test supabase/functions/_shared/
 
-import { assert, assertAlmostEquals, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertAlmostEquals, assertEquals } from "./_test_assert.ts";
 import {
   dataQualityScore, depthWithinPct, estimateSlippagePct, isCrossed,
   isLeveragedToken, normalizeAmount, normalizePrice, spreadBps,

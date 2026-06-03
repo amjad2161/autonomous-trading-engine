@@ -4,7 +4,7 @@
 // on. A claim like "DRY_RUN is the default" or "the kill switch blocks orders"
 // is only trustworthy if it is verifiable. Each test pins one invariant.
 
-import { assert, assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertThrows } from "./_test_assert.ts";
 import {
   assertOrderAllowed,
   effectiveModeWithValidation,

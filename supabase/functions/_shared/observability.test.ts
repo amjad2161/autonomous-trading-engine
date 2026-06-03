@@ -1,7 +1,7 @@
 // Deno tests for replay (event sourcing) + observability metrics.
 //   deno test supabase/functions/_shared/
 
-import { assert, assertAlmostEquals, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertAlmostEquals, assertEquals } from "./_test_assert.ts";
 import { replay, type ReplayEvent } from "./replay.ts";
 import { alertDecisions, computeKpis, maxDrawdown, type TradeRow } from "./metrics.ts";
 

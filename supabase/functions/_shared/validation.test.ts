@@ -1,7 +1,7 @@
 // Deno tests for the edge detector + dataset builder (pure parts).
 //   deno test supabase/functions/_shared/
 
-import { assert, assertAlmostEquals, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertAlmostEquals, assertEquals } from "./_test_assert.ts";
 import { brierScore, calibration, edgeVerdict, logLoss, sharpe, skillScore } from "./validation.ts";
 import { buildUpDownDataset, candlesToReturns, type Candle } from "./dataset.ts";
 

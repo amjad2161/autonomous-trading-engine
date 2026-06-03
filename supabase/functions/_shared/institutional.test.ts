@@ -1,7 +1,7 @@
 // Deno tests for the institutional governance cores (Spec v1.1, Layers 2 & 3).
 //   deno test supabase/functions/_shared/
 
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "./_test_assert.ts";
 import { evaluateInvariants } from "./invariants.ts";
 import {
   executionHealth,

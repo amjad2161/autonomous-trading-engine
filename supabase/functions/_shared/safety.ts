@@ -145,7 +145,7 @@ export function assertOrderAllowed(intent: OrderIntent): TradingMode {
   if (!Number.isFinite(intent.notionalUsdt) || intent.notionalUsdt <= 0) {
     throw new OrderBlockedError(
       "BAD_NOTIONAL",
-      `Refusing order with non-positive notional (${intent.notionalUsdt}).`,
+      `BAD_NOTIONAL: refusing order with non-positive notional (${intent.notionalUsdt}).`,
     );
   }
 
