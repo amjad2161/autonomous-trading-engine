@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.config]
 verify_jwt = false
+
+[functions.edge-test]
+verify_jwt = false
