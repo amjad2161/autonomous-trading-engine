@@ -675,16 +675,28 @@ async function executeLimitOrder(
   ttlMs: number = CONFIG.LIMIT_TTL_MS
 ): Promise<{ success: boolean; orderId?: string; filled?: number; error?: string }> {
   try {
+    // Maker-first entries (spec #57): opt-in via MAKER_FIRST_ENTRIES=1 -> post-only
+    // (poc) for lower fees; may not fill. Default stays IOC (behaviour unchanged).
+    const tif = (side === 'buy' && Deno.env.get('MAKER_FIRST_ENTRIES') === '1') ? 'poc' : 'ioc';
     const order = await gateRequest('/spot/orders', 'POST', {}, {
       currency_pair: pair,
       side,
       amount: amount.toFixed(6),
       price: price.toFixed(8),
       type: 'limit',
-      time_in_force: 'ioc',
+      time_in_force: tif,
       text: clientOrderId,
     });
-    
+
+    // Event sourcing for deterministic replay (best-effort; never breaks the order).
+    try {
+      await supabase.from('event_log').insert({
+        type: 'order_sent',
+        symbol: pair,
+        payload: { side, amount, price, tif, clientOrderId, orderId: order?.id ?? null, dryRun: order?.dryRun ?? false },
+      });
+    } catch (_e) { /* replay logging is best-effort */ }
+
     if (order.id) {
       return { success: true, orderId: order.id, filled: parseFloat(order.filled_total || order.amount) };
     }
