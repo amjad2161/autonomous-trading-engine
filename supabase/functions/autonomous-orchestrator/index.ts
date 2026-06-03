@@ -3,6 +3,7 @@ import { guardSpotOrder, getRiskCaps, getCanaryFraction } from "../_shared/safet
 import { resolveConfig, type MarketRegime } from "../_shared/profiles.ts";
 import { evaluateInvariants, invariantReason } from "../_shared/invariants.ts";
 import { riskPosture, postureBlocksEntries } from "../_shared/health.ts";
+import { computeKpis, alertDecisions } from "../_shared/metrics.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createHmac } from "https://deno.land/std@0.177.0/node/crypto.ts";
 import { encodeHex } from "https://deno.land/std@0.224.0/encoding/hex.ts";
@@ -1293,12 +1294,27 @@ serve(async (req) => {
     if (command === 'status') {
       const perfMap = await getPerformanceByPair();
       const disabled = identifyPairsToDisable(perfMap);
-      
+
+      // Observability (read-only): KPIs + alerts from recent trade history.
+      const { data: recent } = await supabase
+        .from('trade_history')
+        .select('actual_pnl,status')
+        .order('executed_at', { ascending: false })
+        .limit(200);
+      const rows = (recent ?? []).map((t: { actual_pnl: number | null; status: string | null }) => ({
+        pnlUsdt: Number(t.actual_pnl ?? 0),
+        filled: t.status !== 'failed' && t.status !== 'rejected',
+      }));
+      const kpis = computeKpis(rows);
+      const alerts = alertDecisions(kpis);
+
       return new Response(JSON.stringify({
         success: true,
         state: dbState,
         disabled_pairs: Array.from(disabled),
         performance: Object.fromEntries(perfMap),
+        kpis,
+        alerts,
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

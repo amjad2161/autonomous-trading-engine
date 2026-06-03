@@ -50,6 +50,8 @@ export function useAutonomousSystem() {
   const [state, setState] = useState<SystemState | null>(null);
   const [trades, setTrades] = useState<TradeHistoryItem[]>([]);
   const [logs, setLogs] = useState<SystemLogItem[]>([]);
+  const [kpis, setKpis] = useState<Record<string, number> | null>(null);
+  const [alerts, setAlerts] = useState<Array<{ level: string; message: string }>>([]);
   const [positionManagerStatus, setPositionManagerStatus] = useState<PositionManagerResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +74,8 @@ export function useAutonomousSystem() {
       if (data.recentLogs) {
         setLogs(data.recentLogs);
       }
+      if (data.kpis) setKpis(data.kpis);
+      if (data.alerts) setAlerts(data.alerts);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch state');
@@ -170,6 +174,8 @@ export function useAutonomousSystem() {
     state,
     trades,
     logs,
+    kpis,
+    alerts,
     positionManagerStatus,
     isLoading,
     error,
