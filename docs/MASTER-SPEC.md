@@ -81,7 +81,7 @@ microstructure, smart filtering). No spoofing/wash/manipulation, no ToS evasion.
 
 ### F) Execution Quality
 56 priority queue (exits first) 🟡 · 57 maker-first entry 🟡 · 58 smart reprice 📄 · 59 IOC exit first 🟡 ·
-60 market fallback 🟡 · 61 partial-fill handler 📄 · 62 order state machine 📄 · 63 idempotency 🟡 clientOrderId ·
+60 market fallback 🟡 · 61 partial-fill handler ✅ `order-state.ts` · 62 order state machine ✅ `order-state.ts` · 63 idempotency 🟡 clientOrderId ·
 64 execution health score ✅ `executionHealth()` · 65 adaptive timeouts 📄
 
 ### G) Hard Risk Core
@@ -90,8 +90,8 @@ microstructure, smart filtering). No spoofing/wash/manipulation, no ToS evasion.
 72 API error-burst guard 🟡 `riskPosture` · 73 WS-down guard 🟡 INV-01 · 74 liquidity-vacuum guard 🟡 · 75 kill-switch levels 🟡 `RiskPosture` ladder
 
 ### H) Controlled Learning
-76 shadow twin 📄 · 77 offline training 📄 · 78 soft-params only 📄 · 79 canary rollout 📄 ·
-80 auto rollback 📄 · 81 drift detection 📄 · 82 feature-store versioning 📄 · 83 A/B testing 📄 ·
+76 shadow twin 📄 · 77 offline training 📄 · 78 soft-params only 🟡 `governance` · 79 canary rollout 🟡 `governance` + `getCanaryFraction()` ·
+80 auto rollback 🟡 `governance.shouldRollback()` · 81 drift detection 📄 · 82 feature-store versioning 📄 · 83 A/B testing 📄 ·
 84 strategy darwinism 📄 · 85 meta "don't trade" 📄  (all gated by `REQUIRE_VALIDATION`)
 
 ### I) Reliability & Recovery

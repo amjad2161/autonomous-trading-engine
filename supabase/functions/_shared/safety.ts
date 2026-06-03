@@ -105,6 +105,17 @@ export function getRiskCaps(): RiskCaps {
   };
 }
 
+/**
+ * Canary capital fraction (0..1) for the Paper→Live transition. During canary,
+ * live order notional is additionally capped to this fraction of equity so live
+ * trading starts on a sliver of capital (Master Spec: Canary 5–10%). Default 1.0
+ * (= no canary limit); set CANARY_CAPITAL_PCT=10 to risk only 10% during canary.
+ */
+export function getCanaryFraction(): number {
+  const pct = envNum("CANARY_CAPITAL_PCT", 100);
+  return Math.min(1, Math.max(0, pct / 100));
+}
+
 export class OrderBlockedError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {

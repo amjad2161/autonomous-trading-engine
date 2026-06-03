@@ -53,6 +53,8 @@ The **default tab is "Hyper"** → the system is wired to foreground the
 | `_shared/invariants.ts` | NEW | Formal risk invariants (INV-01..05) — system-state gate on new entries. |
 | `_shared/health.ts` | NEW | Real-time KPIs → risk posture, execution health, toxicity, personality, capital routing, latency. |
 | `_shared/scoring.ts` | NEW | Net-edge cost model, dynamic sizing, opportunity scoring, expiry, cooldown. |
+| `_shared/order-state.ts` | NEW | Order lifecycle state machine (NEW→…→FILLED), idempotent, partial fills. |
+| `_shared/governance.ts` | NEW | SHADOW→CANARY→LIVE promotion gates + auto-rollback on KPI degradation. |
 | `config` | NEW | Runtime get/set of the active mode + autopilot flags (stored in `trading_system_state.settings`). |
 
 ### 3.2 The orchestration brain

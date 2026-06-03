@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { guardSpotOrder, getRiskCaps } from "../_shared/safety.ts";
+import { guardSpotOrder, getRiskCaps, getCanaryFraction } from "../_shared/safety.ts";
 import { resolveConfig, type MarketRegime } from "../_shared/profiles.ts";
 import { evaluateInvariants, invariantReason } from "../_shared/invariants.ts";
 import { riskPosture, postureBlocksEntries } from "../_shared/health.ts";
@@ -1176,6 +1176,9 @@ async function runEliteCycle(): Promise<{
 
     // AUTOPILOT profile: cap order notional by the selected mode's maxTradeUsdt.
     size = Math.min(size, cfg.maxTradeUsdt);
+
+    // CANARY: during the Paper→Live transition, cap to a fraction of equity.
+    size = Math.min(size, state.currentBalance * getCanaryFraction());
     
     console.log(`[ENTRY] ${signal.pair} | Balance: $${state.currentBalance.toFixed(2)} | Risk: ${(risk*100).toFixed(1)}% | Size: $${size.toFixed(2)}`);
     
