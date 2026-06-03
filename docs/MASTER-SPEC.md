@@ -80,7 +80,7 @@ are the remaining 📄):
 14 wallet invariants ✅ `invariants` · 15 capital-velocity meter 📄
 
 ### B) Market Data & Hygiene
-16 WS-first ✅ (ws-telemetry) · 17 staleness detection ✅ wired (INV-01) · 18 clock-drift guard 📄 · 19 integrity filters 📄 ·
+16 WS-first ✅ (ws-telemetry) · 17 staleness detection ✅ wired (INV-01) · 18 clock-drift guard ✅ `opportunities.ts` · 19 integrity filters 📄 ·
 20 universe auto-discovery 🟡 · 21 tick normalization ✅ wired · 22 snapshot+deltas 🟡 · 23 feed redundancy 📄 ·
 24 data quality score 🟡 `dataQualityScore` · 25 event sourcing ✅ wired (event_log)
 
@@ -91,8 +91,8 @@ are the remaining 📄):
 
 ### D) Opportunity Detection (legal)
 36 tri-arb 🟡 · 37 maker spread harvest 🟡 · 38 microstructure scalp 🟡 · 39 compression breakout 🟡 ·
-40 safe mean-reversion 🟡 · 41 opportunity expiry ✅ `scoring.opportunityExpired()` · 42 normalized output 📄 ·
-43 dedup 📄 · 44 false-positive filters 🟡 toxicity · 45 arb leg-risk check 📄
+40 safe mean-reversion 🟡 · 41 opportunity expiry ✅ `scoring.opportunityExpired()` · 42 normalized output ✅ `opportunities.ts` ·
+43 dedup ✅ `opportunities.ts` · 44 false-positive filters 🟡 toxicity · 45 arb leg-risk check 📄
 
 ### E) Scoring, Planning, Autonomy
 46 unified net-edge score ✅ `scoring.scoreOpportunity()` · 47 risk-weighted allocation 🟡 · 48 multi-horizon brain 📄 ·
