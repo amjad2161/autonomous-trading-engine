@@ -4,6 +4,10 @@
 > This is the most secure option — your Gate.io keys never leave your computer,
 > nothing runs in the cloud, and you open/close it whenever you like. Defaults to
 > DRY_RUN (real data, no live orders).
+>
+> **New here? Follow [`SETUP-WALKTHROUGH.md`](./SETUP-WALKTHROUGH.md)** — a full
+> click-by-click guide (Hebrew, with English commands) from zero to running.
+> This file is the quick technical reference.
 
 ## What runs where
 

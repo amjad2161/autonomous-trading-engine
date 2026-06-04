@@ -117,12 +117,12 @@ A second review of the F8/F9 diff caught regressions/gaps the first pass left:
   *merges* the `settings` JSON onto the freshly-read row instead of overwriting it
   from a stale snapshot, so the day-start anchor write can't clobber concurrent
   keys (and the daily-loss breaker can't be silently re-anchored).
-- **Partial-fill exit accounting:** `micro-scalper` exit now books P&L on the size
-  actually sold and keeps the residual open (FIXED). `master-brain` exit/swap/dust
-  sells still book the full position (mark-to-market `pos.usdValue*pnl%`) on a
-  partial fill — left as-is (DEFERRED): the proportional rework across its four
-  heterogeneous sell sites needs runtime fill data to verify, and IOC partials are
-  low-probability. The orchestrator (primary path) is unaffected.
+- **Partial-fill exit accounting (FIXED):** `micro-scalper` exit books P&L on the
+  size actually sold and keeps the residual open. `master-brain` exit/liquidate/swap
+  sells now book P&L proportional to `result.filledAmount / pos.amount` at the real
+  fill price and keep the residual position open on a partial fill; the swap defers
+  its follow-on buy on a partial sell so it cannot over-commit the (overstated)
+  freed USDT. The orchestrator (primary path) was always fill-verified.
 
 ### 🟡 F9 — Phantom IOC fills in legacy scalpers — dangerous paths FIXED
 `micro-scalper`, `rapid-trader`, `continuous-trader` treated an IOC order as fully
