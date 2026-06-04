@@ -9,6 +9,11 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
     port: 8080,
+    // Fail loudly if 8080 is taken instead of silently drifting to 8081/8082.
+    // A leftover dev server on 8080 was causing users to keep opening a STALE
+    // dashboard (old code) while the fresh one ran on another port — making
+    // fixes appear to do nothing. Strict port surfaces that immediately.
+    strictPort: true,
     hmr: {
       overlay: false,
     },
