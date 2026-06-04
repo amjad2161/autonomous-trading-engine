@@ -246,16 +246,25 @@ async function executeOrder(
       currency_pair: symbol,
       type: 'market',
       side,
+      // Gate spot MARKET orders: for BUY, `amount` is the quote (USDT) to spend;
+      // for SELL, `amount` is the base quantity. Callers pass the side-correct unit.
       amount,
       time_in_force: 'ioc',
-    }) as { id?: string; amount?: string; avg_deal_price?: string; message?: string };
-    
+    }) as { id?: string; amount?: string; filled_amount?: string; filled_total?: string; avg_deal_price?: string; message?: string };
+
     if (result.id) {
+      // Always report the BASE quantity actually filled (never the submitted
+      // amount, which is quote for a market buy). Prefer the exchange's
+      // filled_amount; else derive base = filled_total / avg_deal_price.
+      const avg = parseFloat(result.avg_deal_price || '0');
+      const filledBase = parseFloat(result.filled_amount || '0');
+      const filledQuote = parseFloat(result.filled_total || '0');
+      const base = filledBase > 0 ? filledBase : (avg > 0 ? filledQuote / avg : 0);
       return {
         success: true,
         orderId: result.id,
-        filledAmount: parseFloat(result.amount || '0'),
-        avgPrice: parseFloat(result.avg_deal_price || '0'),
+        filledAmount: base,
+        avgPrice: avg,
       };
     }
     return { success: false, error: result.message || 'Unknown error' };
@@ -646,16 +655,18 @@ serve(async (req) => {
               // Buy new opportunity
               const oppMarket = markets.find(m => m.symbol === opp.symbol);
               if (oppMarket) {
-                const buyAmount = (decision.freedAmount / oppMarket.price).toFixed(6);
-                const buyResult = await executeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyAmount);
-                
+                // Market BUY: send the quote (USDT) to spend; store the BASE size
+                // from the actual fill (fallback to a base estimate, never the quote).
+                const buyQuote = decision.freedAmount.toFixed(6);
+                const buyResult = await executeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyQuote);
+
                 if (buyResult.success) {
                   positions.push({
                     id: `${opp.symbol}-${Date.now()}`,
                     symbol: opp.symbol,
                     strategy: opp.strategy,
                     entryPrice: buyResult.avgPrice || oppMarket.price,
-                    amount: buyResult.filledAmount || parseFloat(buyAmount),
+                    amount: buyResult.filledAmount || (decision.freedAmount / oppMarket.price),
                     usdValue: decision.freedAmount,
                     currentValue: decision.freedAmount,
                     pnlPercent: 0,
@@ -705,17 +716,19 @@ serve(async (req) => {
             if (!market) continue;
             
             const size = Math.min(signal.suggestedSize, totalBalance * MASTER_CONFIG.maxSinglePosition);
-            const buyAmount = (size / market.price).toFixed(6);
-            
-            const result = await executeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyAmount);
-            
+            // Market BUY: send the quote (USDT) to spend; store the BASE size from
+            // the actual fill (fallback to a base estimate, never the quote).
+            const buyQuote = size.toFixed(6);
+
+            const result = await executeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote);
+
             if (result.success) {
               positions.push({
                 id: `${signal.symbol}-${Date.now()}`,
                 symbol: signal.symbol,
                 strategy: signal.strategy,
                 entryPrice: result.avgPrice || market.price,
-                amount: result.filledAmount || parseFloat(buyAmount),
+                amount: result.filledAmount || (size / market.price),
                 usdValue: size,
                 currentValue: size,
                 pnlPercent: 0,

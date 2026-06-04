@@ -125,18 +125,27 @@ async function getMarketData(apiKey: string, apiSecret: string): Promise<MarketD
 async function placeOrder(
   apiKey: string, apiSecret: string,
   symbol: string, side: 'buy' | 'sell', amount: string
-): Promise<{ success: boolean; orderId?: string; error?: string }> {
+): Promise<{ success: boolean; orderId?: string; filledAmount?: number; avgPrice?: number; error?: string }> {
   try {
     const result = await gateRequest('POST', '/api/v4/spot/orders', apiKey, apiSecret, {}, {
       currency_pair: symbol,
       type: 'market',
       side,
+      // Gate spot MARKET orders: BUY `amount` is quote (USDT) to spend; SELL
+      // `amount` is base quantity. Callers pass the side-correct unit.
       amount,
       time_in_force: 'ioc',
-    }) as { id?: string; message?: string };
-    
+    }) as { id?: string; filled_amount?: string; filled_total?: string; avg_deal_price?: string; message?: string };
+
     if (result.id) {
-      return { success: true, orderId: result.id };
+      // Report the BASE quantity actually filled, never the submitted amount
+      // (which is quote for a market buy). Prefer filled_amount; else derive
+      // base = filled_total / avg_deal_price.
+      const avg = parseFloat(result.avg_deal_price || '0');
+      const filledBase = parseFloat(result.filled_amount || '0');
+      const filledQuote = parseFloat(result.filled_total || '0');
+      const base = filledBase > 0 ? filledBase : (avg > 0 ? filledQuote / avg : 0);
+      return { success: true, orderId: result.id, filledAmount: base, avgPrice: avg };
     }
     return { success: false, error: result.message || 'Unknown error' };
   } catch (e) {
@@ -509,19 +518,20 @@ serve(async (req) => {
             const tradeSize = Math.min(freeBalance * CONFIG.whale.maxFollowSize, freeBalance);
             if (tradeSize < CONFIG.minTradeSize) continue;
             
-            const amount = (tradeSize / market.price).toFixed(6);
-            
+            // Market BUY: send quote (USDT) to spend; store BASE size from the fill.
+            const buyQuote = tradeSize.toFixed(6);
+
             console.log(`[WHALE] Following ${signal.symbol} | Vol: ${signal.volumeRatio.toFixed(1)}x | Conf: ${signal.confidence}%`);
-            
+
             await new Promise(r => setTimeout(r, CONFIG.whale.followDelay));
-            const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', amount);
-            
+            const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote);
+
             if (result.success) {
               positions.push({
                 symbol: signal.symbol,
                 side: 'buy',
-                entryPrice: market.price,
-                amount: parseFloat(amount),
+                entryPrice: result.avgPrice || market.price,
+                amount: result.filledAmount || (tradeSize / market.price),
                 strategy: 'whale',
                 timestamp: Date.now(),
               });
@@ -553,21 +563,24 @@ serve(async (req) => {
             
             const tradeSize = Math.min(freeBalance * CONFIG.grid.orderSize, freeBalance);
             if (tradeSize < CONFIG.minTradeSize) continue;
-            
-            const amount = (tradeSize / market.price).toFixed(6);
-            
+
+            // Market order units differ by side: BUY spends quote (USDT), SELL
+            // sends base quantity.
+            const baseEst = tradeSize / market.price;
+            const orderAmount = level.side === 'buy' ? tradeSize.toFixed(6) : baseEst.toFixed(6);
+
             console.log(`[GRID] ${level.side.toUpperCase()} ${level.symbol} @ level ${level.level}`);
-            const result = await placeOrder(apiKey, apiSecret, level.symbol, level.side, amount);
-            
+            const result = await placeOrder(apiKey, apiSecret, level.symbol, level.side, orderAmount);
+
             if (result.success) {
               level.filled = true;
-              
+
               if (level.side === 'buy') {
                 positions.push({
                   symbol: level.symbol,
                   side: 'buy',
-                  entryPrice: market.price,
-                  amount: parseFloat(amount),
+                  entryPrice: result.avgPrice || market.price,
+                  amount: result.filledAmount || baseEst,
                   strategy: 'grid',
                   timestamp: Date.now(),
                   gridLevel: level.level,
@@ -589,17 +602,18 @@ serve(async (req) => {
           const market = markets.find(m => m.symbol === opp.symbol);
           if (!market) continue;
           
-          const amount = (opp.suggestedSize / market.price).toFixed(6);
-          
+          // Market BUY: send quote (USDT) to spend; store BASE size from the fill.
+          const buyQuote = opp.suggestedSize.toFixed(6);
+
           console.log(`[DCA] Level ${opp.dcaLevel} entry ${opp.symbol} | Dip: ${opp.dipPercent.toFixed(1)}%`);
-          const result = await placeOrder(apiKey, apiSecret, opp.symbol, 'buy', amount);
-          
+          const result = await placeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyQuote);
+
           if (result.success) {
             positions.push({
               symbol: opp.symbol,
               side: 'buy',
-              entryPrice: market.price,
-              amount: parseFloat(amount),
+              entryPrice: result.avgPrice || market.price,
+              amount: result.filledAmount || (opp.suggestedSize / market.price),
               strategy: 'dca',
               timestamp: Date.now(),
               dcaLevel: opp.dcaLevel,
@@ -620,17 +634,18 @@ serve(async (req) => {
           const market = markets.find(m => m.symbol === signal.symbol);
           if (!market) continue;
           
-          const amount = (tradeSize / market.price).toFixed(6);
-          
+          // Market BUY: send quote (USDT) to spend; store BASE size from the fill.
+          const buyQuote = tradeSize.toFixed(6);
+
           console.log(`[MOMENTUM] ${signal.direction.toUpperCase()} ${signal.symbol} | Strength: ${signal.strength.toFixed(0)}%`);
-          const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', amount);
-          
+          const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote);
+
           if (result.success) {
             positions.push({
               symbol: signal.symbol,
               side: 'buy',
-              entryPrice: market.price,
-              amount: parseFloat(amount),
+              entryPrice: result.avgPrice || market.price,
+              amount: result.filledAmount || (tradeSize / market.price),
               strategy: 'momentum',
               timestamp: Date.now(),
             });

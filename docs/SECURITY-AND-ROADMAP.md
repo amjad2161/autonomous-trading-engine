@@ -74,18 +74,23 @@ spend; only limit/sell orders use base quantity. Several legacy engines computed
 `amount = usdSize / price` (base units) for market buys, which (a) mis-sizes the
 live order by a factor of `price` and (b) fools the safety cap, because
 `safety.ts:notionalFromBody` reads a market order's `amount` as the notional.
-- **Fixed (clean, response-driven engines):** `hyper-engine` and `realtime-trader`
-  now send the quote-USDT spend on the buy. Both already derive the base size to
-  sell from the actual fill (`filled_total` / `filled_amount`), so the fix is
-  self-contained and also makes the notional cap gauge correctly.
-- **Deferred (entangled — needs runtime):** `master-brain` and `ultimate-trader`
-  store the *submitted base amount* into the position and later sell
-  `position.amount`. Sending quote there without first reworking fill-derivation
-  from the Gate response (whose exact market-buy field shape we cannot verify
-  offline) would cause a catastrophic **oversell**, so these are left as-is and
-  must be fixed against a live/sandbox response. They are DRY_RUN-gated and not
-  the primary live path (the `autonomous-orchestrator` uses **limit** buys, where
-  base units are correct). Best fix is F4: collapse to one executor.
+**Fixed in all four affected engines.** Every market BUY now submits the
+quote-USDT spend, and every engine stores the position's BASE size from the
+*actual fill* rather than the submitted amount:
+- `hyper-engine`, `realtime-trader` — already response-driven (sell the base read
+  back from the fill); the buy now sends quote-USDT.
+- `master-brain`, `ultimate-trader` — `executeOrder`/`placeOrder` now return the
+  filled **base** quantity (preferring `filled_amount`, else
+  `filled_total / avg_deal_price`), and each entry stores
+  `result.filledAmount || (usd / price)` — a base estimate fallback, **never the
+  quote**, so the later `sell position.amount` cannot oversell. This is safe
+  offline because the stored size is always a base quantity by construction.
+
+The fix also re-aligns the safety cap: `notionalFromBody` reads a market order's
+`amount` as the notional, which is now correct (quote-USDT) for buys. The primary
+live path (`autonomous-orchestrator`) was never affected — it uses **limit** buys,
+where base units are correct. Long-term, F4 (collapse to one executor) removes the
+duplication that let this drift across engines.
 
 ### 🟡 F9 — Phantom IOC fills & partial-fill P&L in legacy scalpers — MED (deferred)
 `micro-scalper`, `rapid-trader`, `continuous-trader` treat an IOC order as fully
