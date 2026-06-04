@@ -90,9 +90,21 @@ catch { warn("migration up unavailable; if tables are missing run 'supabase db r
 // capture local keys from `supabase status -o json`
 let status = {};
 try { status = JSON.parse(capture("supabase status -o json") || "{}"); } catch { /* keep {} */ }
-const API_URL = status.API_URL || "http://127.0.0.1:54321";
-const ANON    = status.ANON_KEY || "";
-const SRK     = status.SERVICE_ROLE_KEY || "";
+// Be tolerant of CLI version differences in key casing (API_URL vs api_url, …).
+const pick = (obj, ...keys) => {
+  for (const k of keys) {
+    const hit = Object.keys(obj).find((o) => o.toLowerCase() === k.toLowerCase());
+    if (hit && obj[hit]) return String(obj[hit]);
+  }
+  return "";
+};
+const API_URL = pick(status, "API_URL", "api_url") || "http://127.0.0.1:54321";
+const ANON    = pick(status, "ANON_KEY", "anon_key");
+const SRK     = pick(status, "SERVICE_ROLE_KEY", "service_role_key");
+if (!ANON || !SRK) {
+  warn("Could not read ANON_KEY/SERVICE_ROLE_KEY from 'supabase status' — the dashboard");
+  warn("may fail to reach the backend. Check 'supabase status' output manually if so.");
+}
 
 const readEnv = (file, key) => {
   if (!existsSync(file)) return "";
