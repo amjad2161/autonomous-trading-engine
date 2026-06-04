@@ -15,11 +15,17 @@ const FUNCTION_SECRET = import.meta.env.VITE_FUNCTION_SECRET as string | undefin
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
+// This app has NO Supabase Auth/login flow — it talks to the local stack purely
+// with the publishable/anon key. Persisting a session is therefore not just
+// pointless but harmful: after re-running `npm run setup` (which can rotate the
+// local JWT secret), a stale session token left in localStorage gets sent as
+// `Authorization: Bearer <expired-jwt>` and PostgREST rejects it with 401 —
+// even though the anon key is valid. Disabling session persistence makes the
+// client always authenticate with the anon key, eliminating those 401s.
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
-    storage: localStorage,
-    persistSession: true,
-    autoRefreshToken: true,
+    persistSession: false,
+    autoRefreshToken: false,
   },
   global: FUNCTION_SECRET
     ? { headers: { 'x-function-secret': FUNCTION_SECRET } }
