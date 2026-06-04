@@ -13,8 +13,9 @@
     "test:watch": "vitest",
     "ticker": "node scripts/local-ticker.mjs",
     "ws": "node scripts/ws-telemetry.mjs",
-    "setup": "bash scripts/setup-local.sh",
-    "preflight": "bash scripts/preflight.sh"
+    "setup": "node scripts/setup-local.mjs",
+    "setup:bash": "bash scripts/setup-local.sh",
+    "preflight": "node scripts/preflight.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

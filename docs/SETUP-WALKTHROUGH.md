@@ -14,7 +14,18 @@
 |---|---|---|
 | **Node.js 18+** | מריץ את הדשבורד | https://nodejs.org (הורד "LTS") |
 | **Docker Desktop** | מריץ את ה‑Supabase המקומי | https://www.docker.com/products/docker-desktop |
-| **Supabase CLI** | מקים את ה‑DB והפונקציות | https://supabase.com/docs/guides/cli |
+| **Supabase CLI** | מקים את ה‑DB והפונקציות | ראה התקנה למטה ↓ |
+
+**התקנת Supabase CLI:**
+- **Windows** (PowerShell) — דרך Scoop:
+  ```powershell
+  Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+  scoop bucket add supabase https://github.com/supabase/scoop-bucket.git
+  scoop install supabase
+  ```
+  אם Scoop כבר מותקן, רק שתי השורות האחרונות.
+- **Mac** — `brew install supabase/tap/supabase`
+- **Linux** — ראה https://supabase.com/docs/guides/cli
 
 איך לבדוק שהכול הותקן — פתח טרמינל והקלד:
 ```bash
@@ -24,8 +35,9 @@ supabase --version
 ```
 אם אחד מהם נכשל — התקן אותו מהקישור ופתח טרמינל מחדש.
 
-> **Windows:** התקן Docker Desktop והפעל אותו (אייקון בלוויין). את הפקודות הרץ
-> בתוך **PowerShell** או **Git Bash**.
+> **Windows:** התקן Docker Desktop והפעל אותו (אייקון בלוויין). את כל הפקודות
+> אפשר להריץ ישירות ב‑**PowerShell** — `npm run setup` ו‑`npm run preflight`
+> רצים דרך Node (לא צריך bash/Git Bash).
 > **Mac:** פתח את אפליקציית Docker פעם אחת כדי שהיא תרוץ ברקע.
 
 ---
