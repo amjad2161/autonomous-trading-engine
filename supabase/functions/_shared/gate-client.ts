@@ -56,5 +56,12 @@ export async function gateFetch(
     body: payloadString || undefined,
   });
 
+  // Surface HTTP errors as exceptions (callers wrap in try/catch) instead of
+  // returning Gate.io's error body as if it were a successful result — otherwise
+  // a credential/API failure looks like data and can be acted on.
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Gate.io ${response.status}: ${text.slice(0, 200)}`);
+  }
   return response.json();
 }

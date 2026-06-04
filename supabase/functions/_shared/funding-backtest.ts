@@ -44,16 +44,19 @@ export function backtestFunding(fundingRates: number[], roundTripCostBps = 8): F
   const cum: number[] = [];
   let run = -rtPct;
   for (const p of perPct) { run += p; cum.push(run); }
-  const dd = maxDrawdown(cum);
-  let peakPos = 0;
-  for (const c of cum) { if (c > peakPos) peakPos = c; }
-  const maxDrawdownPct = peakPos > 0 ? round2((dd / peakPos) * 100) : 0;
+  // Max peak-to-trough drop of the cumulative-carry curve, in percentage POINTS
+  // (the curve is already in %). This is delta-neutral carry, so it is small and
+  // meaningful as-is; normalizing by the carry peak produced unstable ratios.
+  const maxDrawdownPct = round2(maxDrawdown(cum));
 
-  // Reliable only if net-positive AND funding stayed positive most of the time.
-  const reliableCarry = netCarryPct > 0 && pctTimePositive >= 60;
+  // "Losing" = funding actually negative. Zero-funding intervals cost nothing,
+  // so they must NOT count against reliability (the old >=60% positive gate
+  // rejected genuinely never-losing carry that had many flat intervals).
+  const pctTimeLosing = (fundingRates.filter((f) => f < 0).length / n) * 100;
+  const reliableCarry = netCarryPct > 0 && pctTimeLosing <= 40;
   const verdict = reliableCarry
-    ? `net carry +${netCarryPct.toFixed(3)}% over ${n} intervals (funding positive ${pctTimePositive.toFixed(0)}% of the time)`
-    : `NO reliable carry: net ${netCarryPct.toFixed(3)}%, funding positive only ${pctTimePositive.toFixed(0)}% of the time — do not deploy`;
+    ? `net carry +${netCarryPct.toFixed(3)}% over ${n} intervals (funding negative only ${pctTimeLosing.toFixed(0)}% of the time)`
+    : `NO reliable carry: net ${netCarryPct.toFixed(3)}%, funding negative ${pctTimeLosing.toFixed(0)}% of the time — do not deploy`;
 
   return {
     intervals: n,

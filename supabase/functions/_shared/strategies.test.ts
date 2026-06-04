@@ -53,6 +53,7 @@ Deno.test("mm: quotes straddle mid; positive skew shifts both down (offload long
   assertAlmostEquals(q.ask, 100.1, 1e-9);
   const skewed = quotePrices(100, 10, 1);
   assert(skewed.bid < q.bid && skewed.ask < q.ask);
+  assert(skewed.ask > 100, "even at full skew the ask must keep edge over mid (never null a side)");
 });
 
 Deno.test("mm: viable only when spread beats round-trip maker fees", () => {

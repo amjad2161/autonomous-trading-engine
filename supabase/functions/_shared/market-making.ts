@@ -17,9 +17,14 @@ export interface Quotes {
  * (-1..1). Positive skew = too long -> shift both quotes DOWN (more likely to
  * sell, less to buy) to mean-revert inventory toward flat.
  */
+// How much inventory skew may shift the quote center, as a fraction of the
+// half-spread. Capped below 1 so even at full skew BOTH sides keep positive
+// edge over mid (at skew=1: ask = mid*(1 + (1-SKEW_MAX)*half) > mid).
+const SKEW_MAX = 0.6;
+
 export function quotePrices(mid: number, halfSpreadBps: number, skew = 0): Quotes {
   const half = Math.max(0, halfSpreadBps) / 10000;
-  const shift = Math.max(-1, Math.min(1, skew)) * half;
+  const shift = Math.max(-1, Math.min(1, skew)) * half * SKEW_MAX;
   return {
     bid: mid * (1 - half - shift),
     ask: mid * (1 + half - shift),

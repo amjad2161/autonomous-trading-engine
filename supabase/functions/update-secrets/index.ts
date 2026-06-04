@@ -17,9 +17,10 @@ serve(async (req) => {
   }
 
   try {
-    // SECURITY: real auth. This endpoint manages credentials — the most
-    // sensitive surface — so it should be locked down hardest in production.
-    requireAuth(req);
+    // SECURITY: this endpoint WRITES trading credentials — the most sensitive
+    // surface — so it is FAIL-CLOSED: it refuses to run unless the shared secret
+    // is configured (require:true), instead of falling back to presence-only auth.
+    requireAuth(req, { require: true });
 
     const { apiKey, apiSecret } = await req.json();
     

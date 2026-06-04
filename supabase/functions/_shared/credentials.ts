@@ -79,6 +79,9 @@ export async function loadStoredCredentials(supabase: DbClient): Promise<GateCre
     const m = masterKey();
     return { apiKey: await decryptSecret(data.enc_key, m), apiSecret: await decryptSecret(data.enc_secret, m) };
   } catch {
+    // A row exists but won't decrypt — almost always the master key was rotated.
+    // Surface it (loudly) instead of silently behaving as "no credentials".
+    console.warn("[credentials] a stored credentials row exists but could NOT be decrypted (master key rotated/changed?). Re-save your keys in the dashboard.");
     return null;
   }
 }
@@ -91,6 +94,9 @@ export async function getGateCredentials(supabase?: DbClient): Promise<GateCrede
   const k = Deno.env.get("GATE_API_KEY");
   const s = Deno.env.get("GATE_API_SECRET");
   if (k && s) return { apiKey: k, apiSecret: s };
+  if ((k && !s) || (!k && s)) {
+    console.warn("[credentials] only one of GATE_API_KEY / GATE_API_SECRET is set — ignoring the half-set env and trying stored credentials.");
+  }
   if (supabase) {
     const stored = await loadStoredCredentials(supabase);
     if (stored) return stored;

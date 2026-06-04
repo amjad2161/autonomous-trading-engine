@@ -83,11 +83,20 @@ else
   say ".env exists — keeping it."
 fi
 
+# Consistency: the frontend secret MUST equal the server master key, or every
+# signed function call 401s. Warn loudly if a partial re-run left them mismatched.
+FE_SECRET="$(grep -E '^VITE_FUNCTION_SECRET=' .env 2>/dev/null | head -1 | cut -d= -f2-)"
+if [ -n "$FE_SECRET" ] && [ "$FE_SECRET" != "$SECRET" ]; then
+  warn "Mismatch: VITE_FUNCTION_SECRET (.env) != FUNCTION_SHARED_SECRET (.env.local)."
+  warn "Signed function calls will fail (401). Delete BOTH .env and .env.local, then re-run."
+fi
+
 # ---- 5. serve functions (background) + dashboard (foreground) ----------------
 say "Serving edge functions in the background (logs: /tmp/ate-functions.log)"
 supabase functions serve --no-verify-jwt --env-file "$ENVF" >/tmp/ate-functions.log 2>&1 &
 FN_PID=$!
-trap 'kill $FN_PID 2>/dev/null || true' EXIT
+# Stop the background function server (and its children) when this script exits.
+trap 'kill "$FN_PID" 2>/dev/null; pkill -f "functions serve" 2>/dev/null; true' EXIT
 
 printf "\n"; ok "✓ Ready."
 cat <<'NEXT'
