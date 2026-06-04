@@ -2,7 +2,7 @@
 # =============================================================================
 # setup-local.sh — one command to bring up the whole stack on YOUR machine.
 #   bash scripts/setup-local.sh
-# After it finishes you only open http://localhost:5173 -> Settings -> paste keys.
+# After it finishes you only open http://localhost:8080 -> Settings -> paste keys.
 #
 # Idempotent: NEVER overwrites your env files or your saved keys (uses
 # `migration up`, not a wiping `db reset`). Gate.io keys are NOT entered here —
@@ -100,7 +100,7 @@ trap 'kill "$FN_PID" 2>/dev/null; pkill -f "functions serve" 2>/dev/null; true' 
 
 printf "\n"; ok "✓ Ready."
 cat <<'NEXT'
-   1) Open:      http://localhost:5173
+   1) Open:      http://localhost:8080
    2) Settings:  paste your NEW Gate.io key + secret -> Save
                  (it verifies, encrypts, and connects). DRY_RUN = reads, never trades.
    3) Autopilot: turn it ON to watch it shadow-trade on real data.

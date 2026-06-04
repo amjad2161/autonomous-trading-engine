@@ -158,7 +158,7 @@ process.on("exit", cleanup);
 
 console.log("");
 ok("✓ Ready.");
-console.log(`   1) Open:      http://localhost:5173
+console.log(`   1) Open:      http://localhost:8080
    2) Settings:  paste your NEW Gate.io key + secret -> Save
                  (it verifies, encrypts, and connects). DRY_RUN = reads, never trades.
    3) Autopilot: turn it ON to watch it shadow-trade on real data.

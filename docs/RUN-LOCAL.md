@@ -13,7 +13,7 @@
 
 ```
 Your computer
-├─ Dashboard (Vite)        npm run dev        → http://localhost:5173
+├─ Dashboard (Vite)        npm run dev        → http://localhost:8080
 ├─ Local Supabase (Docker) supabase start     → Postgres + Edge Functions
 │   └─ functions serve     supabase functions serve
 ├─ Local ticker            npm run ticker      → drives the autonomous loop
@@ -100,7 +100,7 @@ then continue. Re-run it any time — especially before flipping to live.
 ## 5. Run it
 
 ```bash
-npm run dev      # dashboard at http://localhost:5173
+npm run dev      # dashboard at http://localhost:8080
 # in a second terminal — the autonomous loop:
 SUPABASE_ANON_KEY=<anon> FUNCTION_SECRET=<secret> npm run ticker
 # in a third terminal — WS market-data freshness (feeds INV-01; if it stops,
