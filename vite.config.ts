@@ -17,6 +17,14 @@ export default defineConfig(({ mode }) => ({
     react(),
     mode === "development" && componentTagger(),
     VitePWA({
+      // Disable the PWA/service worker in local development. A SW has no benefit
+      // when running `vite` locally and actively causes harm: it precaches the
+      // built app and then serves STALE assets (old JS bundles, and font URLs
+      // like /assets/fonts/Inter-*.woff2 that a past build referenced) — which
+      // is why pulled fixes appeared not to take and the console filled with
+      // font decode errors. PWA is enabled only for production builds.
+      disable: mode === 'development',
+      devOptions: { enabled: false },
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'robots.txt'],
       manifest: {

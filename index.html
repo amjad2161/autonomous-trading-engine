@@ -18,7 +18,10 @@
     <!-- PWA Icons -->
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/pwa-192x192.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- The PWA manifest <link> is injected automatically by vite-plugin-pwa in
+         production builds. It is intentionally NOT hardcoded here, so local dev
+         (where the PWA is disabled) doesn't 404 /manifest.webmanifest and log a
+         "Manifest syntax error". -->
 
     <!-- Open Graph -->
     <meta property="og:title" content="TradingCore | Autonomous Trading System" />
