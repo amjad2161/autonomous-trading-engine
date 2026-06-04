@@ -239,7 +239,8 @@ async function getFullState(apiKey: string, apiSecret: string): Promise<{
 
 async function executeOrder(
   apiKey: string, apiSecret: string,
-  symbol: string, side: 'buy' | 'sell', amount: string
+  symbol: string, side: 'buy' | 'sell', amount: string,
+  refPrice = 0,
 ): Promise<{ success: boolean; orderId?: string; filledAmount?: number; avgPrice?: number; error?: string }> {
   try {
     const result = await gateRequest('POST', '/api/v4/spot/orders', apiKey, apiSecret, {}, {
@@ -253,13 +254,30 @@ async function executeOrder(
     }) as { id?: string; amount?: string; filled_amount?: string; filled_total?: string; avg_deal_price?: string; message?: string };
 
     if (result.id) {
-      // Always report the BASE quantity actually filled (never the submitted
-      // amount, which is quote for a market buy). Prefer the exchange's
-      // filled_amount; else derive base = filled_total / avg_deal_price.
-      const avg = parseFloat(result.avg_deal_price || '0');
-      const filledBase = parseFloat(result.filled_amount || '0');
-      const filledQuote = parseFloat(result.filled_total || '0');
-      const base = filledBase > 0 ? filledBase : (avg > 0 ? filledQuote / avg : 0);
+      // Always report the BASE quantity actually filled, never the submitted
+      // amount (which is quote for a market buy). `refPrice` (the caller's market
+      // price) backstops avg_deal_price, which is absent in the DRY_RUN synthetic
+      // order — without it a simulated market buy would misread quote as base.
+      const avg = parseFloat(result.avg_deal_price || '0') || refPrice;
+      let base: number;
+      if (side === 'sell') {
+        // SELL amount/fills are already base.
+        base = parseFloat(result.filled_amount || '0');
+        if (base <= 0) {
+          const ft = parseFloat(result.filled_total || '0');
+          if (ft > 0 && avg > 0) base = ft / avg;
+        }
+      } else {
+        // BUY: submitted amount and fills are QUOTE; convert to base via price.
+        const q = parseFloat(result.filled_total || '0') || parseFloat(amount || '0');
+        base = (q > 0 && avg > 0) ? q / avg : 0;
+      }
+      // Require an actual fill. An unfilled IOC still returns an id; treating it
+      // as success would create a phantom position on a buy and book a
+      // mark-to-market P&L as realized on an unfilled exit.
+      if (base <= 0) {
+        return { success: false, orderId: result.id, error: 'IOC order not filled' };
+      }
       return {
         success: true,
         orderId: result.id,
@@ -658,7 +676,7 @@ serve(async (req) => {
                 // Market BUY: send the quote (USDT) to spend; store the BASE size
                 // from the actual fill (fallback to a base estimate, never the quote).
                 const buyQuote = decision.freedAmount.toFixed(6);
-                const buyResult = await executeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyQuote);
+                const buyResult = await executeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyQuote, oppMarket.price);
 
                 if (buyResult.success) {
                   positions.push({
@@ -720,7 +738,7 @@ serve(async (req) => {
             // the actual fill (fallback to a base estimate, never the quote).
             const buyQuote = size.toFixed(6);
 
-            const result = await executeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote);
+            const result = await executeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote, market.price);
 
             if (result.success) {
               positions.push({

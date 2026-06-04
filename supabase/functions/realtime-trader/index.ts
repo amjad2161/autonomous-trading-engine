@@ -595,10 +595,15 @@ serve(async (req) => {
                   const sellFilled = parseFloat(sellOrder.filled_total || '0');
                   const sellPrice = parseFloat(sellOrder.avg_deal_price || best.bid.toString());
 
-                  const netPnl = sellFilled - buyFilled;
-                  const netPnlPct = (netPnl / buyFilled) * 100;
+                  // If the IOC sell did NOT cross, we still HOLD the asset — that is
+                  // not a realized loss. Booking netPnl = 0 - buyFilled here would
+                  // record a fake -100% loss and poison the loss-streak guards.
+                  // Only realize P&L when the sell actually filled (mirrors hyper-engine).
+                  const sellWasFilled = sellFilled > 0;
+                  const netPnl = sellWasFilled ? (sellFilled - buyFilled) : 0;
+                  const netPnlPct = sellWasFilled ? (netPnl / buyFilled) * 100 : 0;
 
-                  trades += 2;
+                  trades += sellWasFilled ? 2 : 1;
                   pnl += netPnlPct;
                   recentTrades.set(best.pair, Date.now());
 
@@ -612,12 +617,18 @@ serve(async (req) => {
                     {
                       symbol: best.pair, side: 'sell', type: 'RT', amount: parseFloat(sellAmt),
                       price: sellPrice, expected_edge: best.edge, actual_pnl: netPnl,
-                      order_id: sellOrder.id, status: 'executed', executed_at: new Date().toISOString(),
+                      order_id: sellOrder.id,
+                      status: sellWasFilled ? 'executed' : 'unfilled_holding',
+                      executed_at: new Date().toISOString(),
                     }
                   ]);
 
-                  const emoji = netPnl >= 0 ? '✅' : '❌';
-                  console.log(`${emoji} [${cycle}] RT ${best.pair} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%)`);
+                  if (!sellWasFilled) {
+                    console.log(`⚠️ [${cycle}] RT ${best.pair} SELL NOT FILLED — holding position (P&L 0, not a loss)`);
+                  } else {
+                    const emoji = netPnl >= 0 ? '✅' : '❌';
+                    console.log(`${emoji} [${cycle}] RT ${best.pair} Buy@${buyPrice.toFixed(6)} Sell@${sellPrice.toFixed(6)} = $${netPnl.toFixed(4)} (${netPnlPct.toFixed(3)}%)`);
+                  }
                   results.push({ t: cycle, s: best.pair, a: 'RT', p: netPnlPct });
                 } else {
                   console.log(`⚠️ [${cycle}] ${best.pair} Buy not filled`);

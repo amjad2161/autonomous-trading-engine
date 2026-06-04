@@ -124,7 +124,8 @@ async function getMarketData(apiKey: string, apiSecret: string): Promise<MarketD
 
 async function placeOrder(
   apiKey: string, apiSecret: string,
-  symbol: string, side: 'buy' | 'sell', amount: string
+  symbol: string, side: 'buy' | 'sell', amount: string,
+  refPrice = 0,
 ): Promise<{ success: boolean; orderId?: string; filledAmount?: number; avgPrice?: number; error?: string }> {
   try {
     const result = await gateRequest('POST', '/api/v4/spot/orders', apiKey, apiSecret, {}, {
@@ -139,12 +140,26 @@ async function placeOrder(
 
     if (result.id) {
       // Report the BASE quantity actually filled, never the submitted amount
-      // (which is quote for a market buy). Prefer filled_amount; else derive
-      // base = filled_total / avg_deal_price.
-      const avg = parseFloat(result.avg_deal_price || '0');
-      const filledBase = parseFloat(result.filled_amount || '0');
-      const filledQuote = parseFloat(result.filled_total || '0');
-      const base = filledBase > 0 ? filledBase : (avg > 0 ? filledQuote / avg : 0);
+      // (which is quote for a market buy). `refPrice` (caller's market price)
+      // backstops avg_deal_price, absent in the DRY_RUN synthetic order.
+      const avg = parseFloat(result.avg_deal_price || '0') || refPrice;
+      let base: number;
+      if (side === 'sell') {
+        base = parseFloat(result.filled_amount || '0');
+        if (base <= 0) {
+          const ft = parseFloat(result.filled_total || '0');
+          if (ft > 0 && avg > 0) base = ft / avg;
+        }
+      } else {
+        // BUY: submitted amount and fills are QUOTE; convert to base via price.
+        const q = parseFloat(result.filled_total || '0') || parseFloat(amount || '0');
+        base = (q > 0 && avg > 0) ? q / avg : 0;
+      }
+      // Require an actual fill — an unfilled IOC still returns an id. Treating it
+      // as success would open a phantom position (buy) or book an unfilled exit.
+      if (base <= 0) {
+        return { success: false, orderId: result.id, error: 'IOC order not filled' };
+      }
       return { success: true, orderId: result.id, filledAmount: base, avgPrice: avg };
     }
     return { success: false, error: result.message || 'Unknown error' };
@@ -483,7 +498,7 @@ serve(async (req) => {
           if (!market) continue;
           
           const sellAmount = (exit.position.amount * 0.998).toFixed(6); // Account for fees
-          const result = await placeOrder(apiKey, apiSecret, exit.position.symbol, 'sell', sellAmount);
+          const result = await placeOrder(apiKey, apiSecret, exit.position.symbol, 'sell', sellAmount, market.price);
           
           if (result.success) {
             console.log(`[EXIT] ${exit.position.symbol} | ${exit.reason} | PnL: ${exit.pnl.toFixed(2)}%`);
@@ -524,7 +539,7 @@ serve(async (req) => {
             console.log(`[WHALE] Following ${signal.symbol} | Vol: ${signal.volumeRatio.toFixed(1)}x | Conf: ${signal.confidence}%`);
 
             await new Promise(r => setTimeout(r, CONFIG.whale.followDelay));
-            const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote);
+            const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote, market.price);
 
             if (result.success) {
               positions.push({
@@ -570,7 +585,7 @@ serve(async (req) => {
             const orderAmount = level.side === 'buy' ? tradeSize.toFixed(6) : baseEst.toFixed(6);
 
             console.log(`[GRID] ${level.side.toUpperCase()} ${level.symbol} @ level ${level.level}`);
-            const result = await placeOrder(apiKey, apiSecret, level.symbol, level.side, orderAmount);
+            const result = await placeOrder(apiKey, apiSecret, level.symbol, level.side, orderAmount, market.price);
 
             if (result.success) {
               level.filled = true;
@@ -606,7 +621,7 @@ serve(async (req) => {
           const buyQuote = opp.suggestedSize.toFixed(6);
 
           console.log(`[DCA] Level ${opp.dcaLevel} entry ${opp.symbol} | Dip: ${opp.dipPercent.toFixed(1)}%`);
-          const result = await placeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyQuote);
+          const result = await placeOrder(apiKey, apiSecret, opp.symbol, 'buy', buyQuote, market.price);
 
           if (result.success) {
             positions.push({
@@ -638,7 +653,7 @@ serve(async (req) => {
           const buyQuote = tradeSize.toFixed(6);
 
           console.log(`[MOMENTUM] ${signal.direction.toUpperCase()} ${signal.symbol} | Strength: ${signal.strength.toFixed(0)}%`);
-          const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote);
+          const result = await placeOrder(apiKey, apiSecret, signal.symbol, 'buy', buyQuote, market.price);
 
           if (result.success) {
             positions.push({
