@@ -269,7 +269,11 @@ async function executeOrder(
         }
       } else {
         // BUY: submitted amount and fills are QUOTE; convert to base via price.
-        const q = parseFloat(result.filled_total || '0') || parseFloat(amount || '0');
+        // Use ONLY the actual quote filled — do NOT fall back to the submitted
+        // amount, or an unfilled LIVE market buy (filled_total 0, id present)
+        // would be read as fully filled and open a phantom position (then a naked
+        // sell on exit). DRY_RUN synthetic orders DO populate filled_total.
+        const q = parseFloat(result.filled_total || '0');
         base = (q > 0 && avg > 0) ? q / avg : 0;
       }
       // Require an actual fill. An unfilled IOC still returns an id; treating it
