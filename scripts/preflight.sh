@@ -26,7 +26,7 @@ sect "Tools"
 for t in node npm; do command -v "$t" >/dev/null 2>&1 && ok "$t present" || bad "$t missing"; done
 command -v supabase >/dev/null 2>&1 && ok "supabase CLI present" || warn "supabase CLI missing (needed to serve locally)"
 command -v docker   >/dev/null 2>&1 && ok "docker present"        || warn "docker missing (needed for local Supabase)"
-command -v deno     >/dev/null 2>&1 && ok "deno present (can run core tests)" || warn "deno missing (core tests will be skipped)"
+command -v deno     >/dev/null 2>&1 && ok "deno present (can run core tests)" || warn "deno missing (core tests fall back to 'npm test' — still verified)"
 
 # ---- 2. safety floor (server env) ------------------------------------------
 sect "Safety configuration ($ENVF)"
@@ -88,8 +88,16 @@ if command -v deno >/dev/null 2>&1; then
   else
     bad "core tests FAILED — inspect /tmp/ate-preflight-tests.log"
   fi
+elif command -v npm >/dev/null 2>&1 && [ -d node_modules ]; then
+  # No Deno? The same safety suite runs under vitest via the Deno shim, so the
+  # safety math is still verified — no need to install Deno just to check it.
+  if npm test --silent >/tmp/ate-preflight-tests.log 2>&1; then
+    ok "core tests passed via npm test ($(grep -Eo '[0-9]+ passed' /tmp/ate-preflight-tests.log | tail -1)) — Deno not required"
+  else
+    bad "core tests FAILED — inspect /tmp/ate-preflight-tests.log"
+  fi
 else
-  warn "deno not installed — core tests skipped (install Deno to verify the safety math)"
+  warn "neither deno nor installed node_modules — core tests skipped (run: npm install)"
 fi
 
 # ---- 5. local stack (optional) ---------------------------------------------
