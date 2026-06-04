@@ -71,7 +71,23 @@ serve(async (req) => {
     // SECURITY: Only use server-side credentials
     // Resolve credentials: env vars first, else the encrypted DB row saved from
     // the dashboard Settings form.
-    const { apiKey: GATE_API_KEY, apiSecret: GATE_API_SECRET } = await getGateCredentials(dbClient());
+    let GATE_API_KEY: string;
+    let GATE_API_SECRET: string;
+    try {
+      ({ apiKey: GATE_API_KEY, apiSecret: GATE_API_SECRET } = await getGateCredentials(dbClient()));
+    } catch {
+      // No key configured yet (neither env nor dashboard). The frontend polls
+      // this proxy on a timer, so throwing here produced a flood of 500s in the
+      // console. Return a clean, success-status payload instead so the dashboard
+      // can prompt the user to add a key — not spam errors.
+      return new Response(
+        JSON.stringify({
+          error: 'no_credentials',
+          message: 'Gate.io API key not configured. Add it in Settings, or set GATE_API_KEY/GATE_API_SECRET in supabase/functions/.env.local.',
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
 
     const baseUrl = 'https://api.gateio.ws';
     const apiPrefix = '/api/v4';
