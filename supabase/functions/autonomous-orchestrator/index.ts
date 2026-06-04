@@ -1067,7 +1067,14 @@ async function runEliteCycle(): Promise<{
   
   // Get day key for daily P&L
   const dayKey = getJerusalemDayKey();
-  
+  // Persisted day-start anchor (resets only at the Jerusalem day boundary).
+  // Using dbState.current_balance was WRONG — it's overwritten every cycle, so
+  // "daily" P&L collapsed to an inter-cycle delta (~0) and the daily-loss
+  // circuit breaker / INV-02 never fired. We anchor to the day's first equity.
+  const __settings = (dbState?.settings ?? {}) as Record<string, unknown>;
+  const __storedAnchor = Number(__settings.dayStartBalance);
+  const __sameDayAnchor = __settings.dayKey === dayKey && Number.isFinite(__storedAnchor) && __storedAnchor > 0;
+
   // Build engine state
   let state: EngineState = {
     systemState: 'NORMAL',
@@ -1075,7 +1082,7 @@ async function runEliteCycle(): Promise<{
     consecutiveLosses: 0,
     dailyPnL: 0,
     dailyPnLPercent: 0,
-    dayStartBalance: dbState?.current_balance || 0,
+    dayStartBalance: __sameDayAnchor ? __storedAnchor : 0, // 0 = (re)anchor after reconcile
     currentBalance: 0,
     totalExposure: 0,
     positions: [],
@@ -1092,8 +1099,14 @@ async function runEliteCycle(): Promise<{
   // Reconcile with Gate.io
   state = await reconcileState(state, tickers);
   
-  // Calculate daily P&L
+  // Calculate daily P&L against the day's start anchor.
   const totalValue = state.currentBalance + state.totalExposure;
+  if (!(state.dayStartBalance > 0)) {
+    // First cycle of the (Jerusalem) day: anchor to current equity and persist
+    // it so every later cycle measures real intra-day P&L against the same base.
+    state.dayStartBalance = totalValue;
+    await updateDBState({ settings: { ...__settings, dayKey, dayStartBalance: totalValue } });
+  }
   state.dailyPnL = totalValue - state.dayStartBalance;
   state.dailyPnLPercent = state.dayStartBalance > 0 ? state.dailyPnL / state.dayStartBalance : 0;
   
@@ -1316,8 +1329,11 @@ async function runEliteCycle(): Promise<{
     
     console.log(`[ENTRY] ${signal.pair} | Balance: $${state.currentBalance.toFixed(2)} | Risk: ${(risk*100).toFixed(1)}% | Size: $${size.toFixed(2)}`);
     
-    if (size < 3) { // Lowered from 5 to 3
-      await log('info', 'ENGINE', `⚠️ Size too small: ${signal.pair} $${size.toFixed(2)} < $3 min`);
+    // Reject non-finite (NaN from a malformed ticker field) AND too-small sizes.
+    // NOTE: `size < 3` alone does NOT catch NaN (NaN < 3 is false), which would
+    // otherwise send amount "NaN" to the exchange. `!(size >= 3)` catches both.
+    if (!(size >= 3)) { // min $3; also blocks NaN / non-finite
+      await log('info', 'ENGINE', `⚠️ Size invalid/too small: ${signal.pair} $${Number(size).toFixed(2)} (< $3 or NaN)`);
       continue;
     }
     
