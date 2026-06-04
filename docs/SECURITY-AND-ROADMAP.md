@@ -68,6 +68,34 @@ signature, so key verification actually works.
 One example test exists. There is a `backtest` + `walk-forward`, but nothing
 forces them to pass before live. The roadmap makes a passing backtest the gate.
 
+### 🔴 F8 — Spot MARKET BUY sized in base units (should be quote/USDT) — HIGH
+Gate.io spot **market buy** orders take `amount` as the **quote (USDT)** to
+spend; only limit/sell orders use base quantity. Several legacy engines computed
+`amount = usdSize / price` (base units) for market buys, which (a) mis-sizes the
+live order by a factor of `price` and (b) fools the safety cap, because
+`safety.ts:notionalFromBody` reads a market order's `amount` as the notional.
+- **Fixed (clean, response-driven engines):** `hyper-engine` and `realtime-trader`
+  now send the quote-USDT spend on the buy. Both already derive the base size to
+  sell from the actual fill (`filled_total` / `filled_amount`), so the fix is
+  self-contained and also makes the notional cap gauge correctly.
+- **Deferred (entangled — needs runtime):** `master-brain` and `ultimate-trader`
+  store the *submitted base amount* into the position and later sell
+  `position.amount`. Sending quote there without first reworking fill-derivation
+  from the Gate response (whose exact market-buy field shape we cannot verify
+  offline) would cause a catastrophic **oversell**, so these are left as-is and
+  must be fixed against a live/sandbox response. They are DRY_RUN-gated and not
+  the primary live path (the `autonomous-orchestrator` uses **limit** buys, where
+  base units are correct). Best fix is F4: collapse to one executor.
+
+### 🟡 F9 — Phantom IOC fills & partial-fill P&L in legacy scalpers — MED (deferred)
+`micro-scalper`, `rapid-trader`, `continuous-trader` treat an IOC order as fully
+filled when only an `id` (or a `filled_amount || amount` fallback) is present, and
+compute exit P&L on the full requested size. `continuous-trader` also parses
+`maxDailyLoss`/`stopLossPercent` but never enforces them. These need a running
+exchange to verify fill semantics; documented here, not patched blind. The
+`autonomous-orchestrator` (primary path) verifies fills and enforces the daily
+breaker (INV-02).
+
 ## 2. How to run it safely
 
 **Paper-first (default, no money at risk):**

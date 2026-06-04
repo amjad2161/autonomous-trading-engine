@@ -562,11 +562,16 @@ serve(async (req) => {
 
               try {
                 // BUY
+                // Gate spot MARKET BUY: `amount` is the QUOTE (USDT) to spend, not
+                // the base quantity. `amount * best.ask` is the intended USDT spend
+                // for the (min-bumped) base size. Sending base here would mis-size
+                // the order by a factor of price and fool the safety notional cap.
+                const buyQuote = (amount * best.ask).toFixed(6);
                 const buyOrder = await gate('POST', '/spot/orders', key, secret, {
                   currency_pair: best.pair,
                   side: 'buy',
                   type: 'market',
-                  amount: amount.toFixed(pInfo.prec),
+                  amount: buyQuote,
                   time_in_force: 'ioc',
                 }) as { id?: string; avg_deal_price?: string; filled_total?: string };
 

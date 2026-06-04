@@ -1868,8 +1868,13 @@ serve(async (req) => {
         // Execute - TAKER STRATEGY: Fast in-out with minimal slippage
         // For tight spreads: use market orders but be smart about it
         try {
-          const amountStr = amount.toFixed(best.prec);
-          
+          // Gate spot MARKET BUY: `amount` is the QUOTE (USDT) to spend, not the
+          // base quantity (base units only apply to limit/sell orders). Sending
+          // base here mis-sizes the order by a factor of price AND fools the
+          // safety cap (notionalFromBody reads market `amount` as the notional).
+          // `orderValue` (= base amount * price) is the intended USDT spend.
+          const buyQuoteStr = orderValue.toFixed(6);
+
           const bidPrice = best.bid || best.price * 0.999;
           const askPrice = best.ask || best.price * 1.001;
           const spread = askPrice - bidPrice;
@@ -1884,9 +1889,9 @@ serve(async (req) => {
           // ===== STEP 1: MARKET BUY =====
           const buyOrder = await gate('POST', '/spot/orders', key, secret, {
             currency_pair: best.symbol, 
-            side: 'buy', 
+            side: 'buy',
             type: 'market',
-            amount: amountStr, 
+            amount: buyQuoteStr,
             time_in_force: 'ioc',
           }) as { id?: string; avg_deal_price?: string; filled_total?: string; amount?: string; filled_amount?: string };
           
