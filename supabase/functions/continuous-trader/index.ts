@@ -155,6 +155,14 @@ async function executeTrade(
     });
     
     if (order.id) {
+      // Count the trade only if the IOC order actually crossed. An unfilled IOC
+      // still returns an id; treating it as executed inflated trade stats and the
+      // balance bookkeeping. Require positive fill evidence.
+      const filledBase = parseFloat(order.filled_amount || '0');
+      const filledQuote = parseFloat(order.filled_total || '0');
+      if (filledBase <= 0 && filledQuote <= 0) {
+        return { success: false, error: 'IOC order not filled' };
+      }
       return { success: true, orderId: order.id, amount };
     } else {
       return { success: false, error: JSON.stringify(order) };

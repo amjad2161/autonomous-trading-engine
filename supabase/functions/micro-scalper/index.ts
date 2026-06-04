@@ -253,7 +253,7 @@ async function executeTrade(
   amount: number,
   price: number,
   reason: string
-): Promise<{ success: boolean; orderId?: string; pnl?: number }> {
+): Promise<{ success: boolean; orderId?: string; filledAmount?: number; avgPrice?: number; pnl?: number }> {
   try {
     // Place IOC order for speed
     const order = await gateRequest('POST', '/spot/orders', {
@@ -264,25 +264,40 @@ async function executeTrade(
       price: price.toString(),
       time_in_force: 'ioc',
     });
-    
+
     if (order.id) {
-      // Log to database
+      // An IOC limit that doesn't cross still returns an id with filled_amount 0.
+      // Counting that as a success created phantom positions (entry) and naked
+      // sells (exit). Require positive fill evidence and report the REAL filled
+      // base size so the position tracks what we actually hold.
+      let filled = parseFloat(order.filled_amount || '0');
+      const avg = parseFloat(order.avg_deal_price || '0') || price;
+      if (filled <= 0) {
+        const ft = parseFloat(order.filled_total || '0');
+        if (ft > 0 && avg > 0) filled = ft / avg;
+      }
+      if (filled <= 0) {
+        console.log(`[MicroScalper] ${side.toUpperCase()} ${symbol}: IOC not filled — no position change`);
+        return { success: false, orderId: order.id };
+      }
+
+      // Log to database (actual filled size)
       await supabase.from('trade_history').insert({
         symbol,
         side,
         type: 'micro_scalp',
-        price,
-        amount,
+        price: avg,
+        amount: filled,
         order_id: order.id,
         status: order.status,
         expected_edge: reason,
       });
-      
-      console.log(`[MicroScalper] ${side.toUpperCase()} ${symbol}: $${(amount * price).toFixed(2)} @ ${price} (${reason})`);
-      
-      return { success: true, orderId: order.id };
+
+      console.log(`[MicroScalper] ${side.toUpperCase()} ${symbol}: $${(filled * avg).toFixed(2)} @ ${avg} (${reason})`);
+
+      return { success: true, orderId: order.id, filledAmount: filled, avgPrice: avg };
     }
-    
+
     return { success: false };
   } catch (e) {
     console.error(`[MicroScalper] Trade error:`, e);
@@ -359,12 +374,13 @@ async function runMicroScalpingCycle(supabase: any): Promise<{
         if (entryCheck.enter) {
           const amount = tradeSize / ask;
           const result = await executeTrade(supabase, pair, 'buy', amount, ask, entryCheck.reason);
-          
-          if (result.success) {
+
+          // Open the position only on a real fill, sized to what actually filled.
+          if (result.success && result.filledAmount && result.filledAmount > 0) {
             activePositions.set(pair, {
               symbol: pair,
-              entryPrice: ask,
-              amount,
+              entryPrice: result.avgPrice || ask,
+              amount: result.filledAmount,
               entryTime: Date.now(),
               highestPrice: ask,
               trailingActive: false,

@@ -129,7 +129,17 @@ async function executeRoundTrip(
     }
 
     result.buyOrderId = buyOrder.id;
-    const filledAmount = parseFloat(buyOrder.filled_amount || buyOrder.amount || amount);
+    // Trust ONLY the actually-filled base quantity. The previous
+    // `|| buyOrder.amount || amount` fallback used the full REQUESTED size when
+    // an IOC order didn't cross, so an unfilled buy looked fully filled and we
+    // then sold base we never bought (naked sell). Require positive fill
+    // evidence: filled_amount, else derive base from filled_total / avg price.
+    let filledAmount = parseFloat(buyOrder.filled_amount || '0');
+    if (filledAmount <= 0) {
+      const ft = parseFloat(buyOrder.filled_total || '0');
+      const ap = parseFloat(buyOrder.avg_deal_price || '0');
+      if (ft > 0 && ap > 0) filledAmount = ft / ap;
+    }
 
     if (filledAmount <= 0) {
       result.error = 'Buy order not filled';
@@ -163,7 +173,14 @@ async function executeRoundTrip(
     }
 
     result.sellOrderId = sellOrder.id;
-    const soldAmount = parseFloat(sellOrder.filled_amount || sellOrder.amount || '0');
+    // Same rule on the sell: count only what actually filled, never the requested
+    // amount, so revenue/P&L isn't overstated when the IOC sell didn't fully cross.
+    let soldAmount = parseFloat(sellOrder.filled_amount || '0');
+    if (soldAmount <= 0) {
+      const ft = parseFloat(sellOrder.filled_total || '0');
+      const ap = parseFloat(sellOrder.avg_deal_price || '0');
+      if (ft > 0 && ap > 0) soldAmount = ft / ap;
+    }
 
     if (soldAmount <= 0) {
       result.error = 'Sell order not filled (holding position)';

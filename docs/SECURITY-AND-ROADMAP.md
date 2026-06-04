@@ -92,14 +92,21 @@ live path (`autonomous-orchestrator`) was never affected — it uses **limit** b
 where base units are correct. Long-term, F4 (collapse to one executor) removes the
 duplication that let this drift across engines.
 
-### 🟡 F9 — Phantom IOC fills & partial-fill P&L in legacy scalpers — MED (deferred)
-`micro-scalper`, `rapid-trader`, `continuous-trader` treat an IOC order as fully
-filled when only an `id` (or a `filled_amount || amount` fallback) is present, and
-compute exit P&L on the full requested size. `continuous-trader` also parses
-`maxDailyLoss`/`stopLossPercent` but never enforces them. These need a running
-exchange to verify fill semantics; documented here, not patched blind. The
-`autonomous-orchestrator` (primary path) verifies fills and enforces the daily
-breaker (INV-02).
+### 🟡 F9 — Phantom IOC fills in legacy scalpers — dangerous paths FIXED
+`micro-scalper`, `rapid-trader`, `continuous-trader` treated an IOC order as fully
+filled when only an `id` (or a `filled_amount || amount` fallback) was present.
+The worst consequence was a **naked sell**: `rapid-trader` sold the full requested
+base after an unfilled buy, and `micro-scalper` opened a phantom position then sold
+base it never held.
+**Fixed:** all three now require **positive fill evidence** (`filled_amount`, or
+`filled_total / avg_deal_price`) before counting a fill, and size positions/sells to
+the **actual filled base**. An unfilled IOC now changes nothing. This is the safe
+direction — it can only *prevent* phantom trades, never create one.
+**Still open (lower risk, needs runtime):** exact partial-fill exit P&L
+attribution, and `continuous-trader`'s `maxDailyLoss`/`stopLossPercent` (it is a
+stateless per-invocation function with no cross-call P&L memory, so a real daily
+breaker belongs in the stateful `autonomous-orchestrator`, which already enforces
+INV-02). The orchestrator remains the primary, fully fill-verified path.
 
 ## 2. How to run it safely
 
