@@ -42,3 +42,27 @@ export function assertThrows(fn: () => unknown, ErrorClass?: any, msgIncludes?: 
   }
   if (!threw) throw new AssertionError(msg ?? "assertThrows: function did not throw");
 }
+
+/** Async counterpart of assertThrows: the promise/async fn must reject. */
+export async function assertRejects(
+  fn: () => Promise<unknown>,
+  // deno-lint-ignore no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ErrorClass?: any,
+  msgIncludes?: string,
+  msg?: string,
+): Promise<void> {
+  let threw = false;
+  try {
+    await fn();
+  } catch (err) {
+    threw = true;
+    if (ErrorClass && !(err instanceof ErrorClass)) {
+      throw new AssertionError(msg ?? `assertRejects: wrong error type (${(err as Error)?.name})`);
+    }
+    if (msgIncludes && !String((err as Error)?.message ?? "").includes(msgIncludes)) {
+      throw new AssertionError(msg ?? `assertRejects: message missing "${msgIncludes}"`);
+    }
+  }
+  if (!threw) throw new AssertionError(msg ?? "assertRejects: promise did not reject");
+}

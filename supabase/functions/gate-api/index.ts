@@ -1,7 +1,15 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { gateSign } from "../_shared/gate-sign.ts";
 import { requireAuth, AuthError } from "../_shared/auth.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
+import { getGateCredentials } from "../_shared/credentials.ts";
+
+function dbClient() {
+  const url = Deno.env.get("SUPABASE_URL");
+  const srk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  return url && srk ? createClient(url, srk) : undefined;
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -61,15 +69,9 @@ serve(async (req) => {
     }
 
     // SECURITY: Only use server-side credentials
-    const GATE_API_KEY = Deno.env.get('GATE_API_KEY');
-    const GATE_API_SECRET = Deno.env.get('GATE_API_SECRET');
-
-    if (!GATE_API_KEY) {
-      throw new Error('Server API Key not configured');
-    }
-    if (!GATE_API_SECRET) {
-      throw new Error('Server API Secret not configured');
-    }
+    // Resolve credentials: env vars first, else the encrypted DB row saved from
+    // the dashboard Settings form.
+    const { apiKey: GATE_API_KEY, apiSecret: GATE_API_SECRET } = await getGateCredentials(dbClient());
 
     const baseUrl = 'https://api.gateio.ws';
     const apiPrefix = '/api/v4';

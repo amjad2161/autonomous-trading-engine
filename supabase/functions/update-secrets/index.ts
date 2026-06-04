@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { requireAuth, AuthError } from "../_shared/auth.ts";
+import { storeCredentials } from "../_shared/credentials.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -69,8 +70,12 @@ serve(async (req) => {
       throw new Error('API keys verification failed');
     }
 
+    // Verified OK -> persist them, encrypted at rest, so the bot actually uses
+    // the keys you typed (env vars still win if also set; see credentials.ts).
+    await storeCredentials(supabase, apiKey, apiSecret);
+
     // SECURITY: Log update without exposing key prefix
-    console.log('[UPDATE-SECRETS] Keys verified successfully');
+    console.log('[UPDATE-SECRETS] Keys verified and stored (encrypted)');
 
     console.log('[UPDATE-SECRETS] Success!');
     

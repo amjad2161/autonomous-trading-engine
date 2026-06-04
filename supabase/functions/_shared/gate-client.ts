@@ -8,8 +8,16 @@
 // and returns the parsed JSON. Functions adopt it with a one-line wrapper.
 // =============================================================================
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { gateSign } from "./gate-sign.ts";
 import { guardSpotOrder } from "./safety.ts";
+import { getGateCredentials } from "./credentials.ts";
+
+function dbClient() {
+  const url = Deno.env.get("SUPABASE_URL");
+  const srk = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  return url && srk ? createClient(url, srk) : undefined;
+}
 
 // deno-lint-ignore no-explicit-any
 export async function gateFetch(
@@ -25,11 +33,8 @@ export async function gateFetch(
     if (sim) return sim;
   }
 
-  const GATE_API_KEY = Deno.env.get("GATE_API_KEY");
-  const GATE_API_SECRET = Deno.env.get("GATE_API_SECRET");
-  if (!GATE_API_KEY || !GATE_API_SECRET) {
-    throw new Error("Gate.io API credentials not configured");
-  }
+  // Credentials: env vars first, else the encrypted DB row saved from the UI.
+  const { apiKey: GATE_API_KEY, apiSecret: GATE_API_SECRET } = await getGateCredentials(dbClient());
 
   const baseUrl = "https://api.gateio.ws";
   const url = `/api/v4${endpoint}`;

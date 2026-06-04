@@ -64,6 +64,17 @@ Serve the functions with that env:
 supabase functions serve --no-verify-jwt --env-file supabase/functions/.env.local
 ```
 
+### Easiest: type the keys in the dashboard instead of the file
+You can leave `GATE_API_KEY`/`GATE_API_SECRET` OUT of `.env.local` and instead
+open the dashboard → **Settings** → paste your Gate.io key + secret → **Save**.
+The `update-secrets` function verifies them against Gate.io and stores them
+**encrypted** (AES-GCM) in your local DB; the bot then uses them automatically.
+(You still need `FUNCTION_SHARED_SECRET` set — it is the encryption master key.)
+
+Honest trade-off: env vars are the most secure path (they win if also set); a
+DB-stored key is encrypted but slightly more exposed than env. Fine for a LOCAL
+single-user setup; for a public deploy prefer env vars.
+
 ## 4. Point the dashboard at your local backend
 
 ```bash
