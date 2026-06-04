@@ -85,6 +85,14 @@ VITE_SUPABASE_PROJECT_ID=local
 VITE_FUNCTION_SECRET=same-value-as-FUNCTION_SHARED_SECRET
 ```
 
+## 4.5 Preflight — confirm it's safe before you start
+
+```bash
+npm run preflight   # read-only GO/NO-GO: safety config, secret match, core tests
+```
+It changes nothing. Fix any ✗ it reports (most often: run `npm run setup` first),
+then continue. Re-run it any time — especially before flipping to live.
+
 ## 5. Run it
 
 ```bash

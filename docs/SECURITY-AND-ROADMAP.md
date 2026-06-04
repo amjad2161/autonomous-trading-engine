@@ -64,9 +64,15 @@ Its verification call to `/spot/accounts` sent `KEY` + `Timestamp` but **no
 **Fix shipped:** the call now computes the proper Gate.io v4 HMAC-SHA512
 signature, so key verification actually works.
 
-### 🟡 F7 — No pre-live test gate / thin tests — MED
-One example test exists. There is a `backtest` + `walk-forward`, but nothing
-forces them to pass before live. The roadmap makes a passing backtest the gate.
+### 🟡 F7 — No pre-live test gate / thin tests — partially addressed
+There is a `backtest` + `walk-forward`, and a growing unit suite (150+ Deno
+tests over the safety floor, signer, quant cores and strategies).
+**Added:** `npm run preflight` — a read-only GO/NO-GO check that verifies the
+safety configuration (DRY_RUN default, kill switch, secret match, risk caps),
+runs the core tests when Deno is present, and prints the exact remaining
+operational steps. It returns non-zero on any hard failure, so it can gate a
+launch. Still open: wiring a *passing backtest* as a hard precondition to
+flipping `TRADING_MODE=LIVE`.
 
 ### 🔴 F8 — Spot MARKET BUY sized in base units (should be quote/USDT) — HIGH
 Gate.io spot **market buy** orders take `amount` as the **quote (USDT)** to
