@@ -16,15 +16,20 @@ import { useEffect } from 'react';
 
 const VIEWER_SRC = 'https://unpkg.com/@splinetool/viewer/build/spline-viewer.js';
 
-// The dashboard's design scene (public .splinecode export — not a secret).
-// Override per-environment with VITE_SPLINE_SCENE_URL; set it to "" to disable.
+// A sample design scene, kept only as a reference for the expected URL shape.
+// It is NOT loaded by default — the 3D background is opt-in (see below), because
+// a generic scene loaded as-is doesn't fit every dashboard and its runtime asset
+// requests (e.g. fonts) spam the console with decode errors on origins that
+// don't host them.
 export const DEFAULT_SPLINE_SCENE = 'https://prod.spline.design/xrddGswnEh9JfZEJ/scene.splinecode';
 
-/** Resolve the active scene URL: env override wins; unset -> the default scene. */
+/**
+ * Resolve the active scene URL. The 3D background is OFF by default; opt in by
+ * setting VITE_SPLINE_SCENE_URL to your own public .splinecode export URL.
+ */
 export function splineSceneUrl(): string | undefined {
   const env = import.meta.env.VITE_SPLINE_SCENE_URL as string | undefined;
-  if (env === undefined) return DEFAULT_SPLINE_SCENE; // not configured -> show default design
-  return env || undefined;                            // explicit "" -> disabled
+  return env || undefined; // unset/"" -> disabled; a real URL -> that scene
 }
 
 declare global {
