@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { gateSign } from "../_shared/gate-sign.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
+import { splitFill } from "../_shared/fill-accounting.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -619,19 +620,18 @@ serve(async (req) => {
           if (result.success) {
             // Book P&L on the fraction ACTUALLY sold, not the whole position. On a
             // partial IOC fill, keep the residual open instead of dropping it.
-            const sellBase = (result.filledAmount && result.filledAmount > 0) ? result.filledAmount : pos.amount;
-            const frac = pos.amount > 0 ? Math.min(1, sellBase / pos.amount) : 1;
-            const pnlUsd = pos.usdValue * (pnl / 100) * frac;
+            const { soldBase, fraction, fullyClosed } = splitFill(pos.amount, result.filledAmount);
+            const pnlUsd = pos.usdValue * (pnl / 100) * fraction;
             totalPnL += pnlUsd;
             totalTrades++;
 
-            console.log(`✅ [EXIT] ${pos.symbol} | ${reason} | $${pnlUsd.toFixed(2)}${frac < 0.999 ? ` (partial ${(frac * 100).toFixed(0)}%)` : ''}`);
+            console.log(`✅ [EXIT] ${pos.symbol} | ${reason} | $${pnlUsd.toFixed(2)}${!fullyClosed ? ` (partial ${(fraction * 100).toFixed(0)}%)` : ''}`);
 
             await supabase.from('trade_history').insert({
               symbol: pos.symbol.replace('_', '/'),
               type: pos.strategy,
               side: 'sell',
-              amount: sellBase,
+              amount: soldBase,
               price: result.avgPrice || market.price,
               actual_pnl: pnlUsd,
               status: 'executed',
@@ -639,12 +639,12 @@ serve(async (req) => {
 
             const idx = positions.findIndex(p => p.id === pos.id);
             if (idx > -1) {
-              if (frac >= 0.999) {
+              if (fullyClosed) {
                 positions.splice(idx, 1);
               } else {
-                positions[idx].amount -= sellBase;
-                positions[idx].usdValue *= (1 - frac);
-                positions[idx].currentValue *= (1 - frac);
+                positions[idx].amount -= soldBase;
+                positions[idx].usdValue *= (1 - fraction);
+                positions[idx].currentValue *= (1 - fraction);
               }
             }
           }
@@ -680,9 +680,8 @@ serve(async (req) => {
             const sellResult = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount, markets.find(m => m.symbol === pos.symbol)?.price || pos.entryPrice);
             
             if (sellResult.success) {
-              const sellBase = (sellResult.filledAmount && sellResult.filledAmount > 0) ? sellResult.filledAmount : pos.amount;
-              const frac = pos.amount > 0 ? Math.min(1, sellBase / pos.amount) : 1;
-              const pnlUsd = pos.usdValue * (pos.pnlPercent / 100) * frac;
+              const { soldBase, fraction, fullyClosed } = splitFill(pos.amount, sellResult.filledAmount);
+              const pnlUsd = pos.usdValue * (pos.pnlPercent / 100) * fraction;
               totalPnL += pnlUsd;
 
               const idx = positions.findIndex(p => p.id === pos.id);
@@ -691,13 +690,13 @@ serve(async (req) => {
               // the freed USDT) when the sell FULLY closed. On a partial fill the
               // freed amount is overstated, so reduce the residual and skip the buy
               // this cycle to avoid over-committing capital.
-              if (frac < 0.999) {
+              if (!fullyClosed) {
                 if (idx > -1) {
-                  positions[idx].amount -= sellBase;
-                  positions[idx].usdValue *= (1 - frac);
-                  positions[idx].currentValue *= (1 - frac);
+                  positions[idx].amount -= soldBase;
+                  positions[idx].usdValue *= (1 - fraction);
+                  positions[idx].currentValue *= (1 - fraction);
                 }
-                console.log(`🔄 [SWAP] ${pos.symbol} only partially sold (${(frac * 100).toFixed(0)}%) — deferring buy of ${opp.symbol}`);
+                console.log(`🔄 [SWAP] ${pos.symbol} only partially sold (${(fraction * 100).toFixed(0)}%) — deferring buy of ${opp.symbol}`);
                 continue;
               }
 
@@ -745,22 +744,21 @@ serve(async (req) => {
             
             if (result.success) {
               // Proportional to the fraction actually sold; keep residual on partial.
-              const sellBase = (result.filledAmount && result.filledAmount > 0) ? result.filledAmount : pos.amount;
-              const frac = pos.amount > 0 ? Math.min(1, sellBase / pos.amount) : 1;
-              const pnlUsd = pos.usdValue * (pos.pnlPercent / 100) * frac;
+              const { soldBase, fraction, fullyClosed } = splitFill(pos.amount, result.filledAmount);
+              const pnlUsd = pos.usdValue * (pos.pnlPercent / 100) * fraction;
               totalPnL += pnlUsd;
               totalTrades++;
 
-              console.log(`⚠️ [LIQUIDATE] ${pos.symbol} | ${decision.reason} | $${pnlUsd.toFixed(2)}${frac < 0.999 ? ` (partial ${(frac * 100).toFixed(0)}%)` : ''}`);
+              console.log(`⚠️ [LIQUIDATE] ${pos.symbol} | ${decision.reason} | $${pnlUsd.toFixed(2)}${!fullyClosed ? ` (partial ${(fraction * 100).toFixed(0)}%)` : ''}`);
 
               const idx = positions.findIndex(p => p.id === pos.id);
               if (idx > -1) {
-                if (frac >= 0.999) {
+                if (fullyClosed) {
                   positions.splice(idx, 1);
                 } else {
-                  positions[idx].amount -= sellBase;
-                  positions[idx].usdValue *= (1 - frac);
-                  positions[idx].currentValue *= (1 - frac);
+                  positions[idx].amount -= soldBase;
+                  positions[idx].usdValue *= (1 - fraction);
+                  positions[idx].currentValue *= (1 - fraction);
                 }
               }
             }

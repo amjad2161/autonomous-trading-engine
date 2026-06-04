@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { guardSpotOrder } from "../_shared/safety.ts";
+import { splitFill } from "../_shared/fill-accounting.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.168.0/crypto/mod.ts";
 
@@ -343,19 +344,19 @@ async function runMicroScalpingCycle(supabase: any): Promise<{
           // Book P&L on the size ACTUALLY sold, at the actual fill price, not the
           // full requested size. On a partial fill keep the residual position open
           // instead of dropping it (which would orphan base and overstate P&L).
-          const soldBase = result.filledAmount && result.filledAmount > 0 ? result.filledAmount : position.amount;
+          const { soldBase, fullyClosed, residualBase } = splitFill(position.amount, result.filledAmount);
           const exitPrice = result.avgPrice || currentPrice;
           const pnl = (exitPrice - position.entryPrice) * soldBase;
           results.pnl += pnl;
           lastTrades.set(symbol, Date.now());
 
-          if (soldBase >= position.amount * 0.999) {
+          if (fullyClosed) {
             results.exits++;
             activePositions.delete(symbol);
             console.log(`[MicroScalper] EXIT ${symbol}: P&L $${pnl.toFixed(4)} (${exitCheck.reason})`);
           } else {
-            position.amount -= soldBase;
-            console.log(`[MicroScalper] PARTIAL EXIT ${symbol}: sold ${soldBase}, P&L $${pnl.toFixed(4)}, ${position.amount} left`);
+            position.amount = residualBase;
+            console.log(`[MicroScalper] PARTIAL EXIT ${symbol}: sold ${soldBase}, P&L $${pnl.toFixed(4)}, ${residualBase} left`);
           }
         }
       }
