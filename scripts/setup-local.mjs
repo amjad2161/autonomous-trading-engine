@@ -57,8 +57,17 @@ catch { die("Docker is installed but not running — start Docker Desktop and re
 ok(`node ${capture("node -v").trim()} | supabase ${capture("supabase --version").trim() || "?"}`);
 
 // ---- 1. dependencies --------------------------------------------------------
-say("Installing dependencies (npm install)");
-run("npm install");
+say("Installing dependencies");
+// Prefer `npm ci`: it installs strictly from package-lock.json and never
+// REWRITES it, so it can't dirty the git tree and make the next `git pull` fail
+// with "local changes would be overwritten" (a silent trap that strands users on
+// stale code). Fall back to `npm install` if the lockfile is missing/out of sync.
+if (existsSync("package-lock.json")) {
+  try { run("npm ci"); }
+  catch { warn("npm ci failed (lockfile out of sync?) — falling back to npm install"); run("npm install"); }
+} else {
+  run("npm install");
+}
 
 const randSecret = () => randomBytes(32).toString("hex");
 
