@@ -337,16 +337,26 @@ async function runMicroScalpingCycle(supabase: any): Promise<{
       const exitCheck = shouldExitTrade(position, currentPrice);
       
       if (exitCheck.exit) {
-        const pnl = (currentPrice - position.entryPrice) * position.amount;
         const result = await executeTrade(supabase, symbol, 'sell', position.amount, currentPrice, exitCheck.reason);
-        
+
         if (result.success) {
-          results.exits++;
+          // Book P&L on the size ACTUALLY sold, at the actual fill price, not the
+          // full requested size. On a partial fill keep the residual position open
+          // instead of dropping it (which would orphan base and overstate P&L).
+          const soldBase = result.filledAmount && result.filledAmount > 0 ? result.filledAmount : position.amount;
+          const exitPrice = result.avgPrice || currentPrice;
+          const pnl = (exitPrice - position.entryPrice) * soldBase;
           results.pnl += pnl;
-          activePositions.delete(symbol);
           lastTrades.set(symbol, Date.now());
-          
-          console.log(`[MicroScalper] EXIT ${symbol}: P&L $${pnl.toFixed(4)} (${exitCheck.reason})`);
+
+          if (soldBase >= position.amount * 0.999) {
+            results.exits++;
+            activePositions.delete(symbol);
+            console.log(`[MicroScalper] EXIT ${symbol}: P&L $${pnl.toFixed(4)} (${exitCheck.reason})`);
+          } else {
+            position.amount -= soldBase;
+            console.log(`[MicroScalper] PARTIAL EXIT ${symbol}: sold ${soldBase}, P&L $${pnl.toFixed(4)}, ${position.amount} left`);
+          }
         }
       }
     }

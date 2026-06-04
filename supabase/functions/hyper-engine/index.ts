@@ -1895,10 +1895,14 @@ serve(async (req) => {
             time_in_force: 'ioc',
           }) as { id?: string; avg_deal_price?: string; filled_total?: string; amount?: string; filled_amount?: string };
           
-          const buyFilled = parseFloat(buyOrder.filled_total || '0');
-          const buyFilledAmount = parseFloat(buyOrder.filled_amount || '0');
+          const buyFilled = parseFloat(buyOrder.filled_total || '0');   // quote (USDT) spent
           const buyPrice = parseFloat(buyOrder.avg_deal_price || askPrice.toString());
-          
+          // Derive BASE filled from quote / price. Do NOT trust filled_amount for a
+          // market BUY: the DRY_RUN synthetic order echoes the submitted QUOTE in
+          // filled_amount, which would size the simulated sell wrong by a factor of
+          // price. quote/price equals the real base in LIVE too (filled_total = base*avg).
+          const buyFilledAmount = buyPrice > 0 ? buyFilled / buyPrice : 0;
+
           if (buyFilledAmount < best.min * 0.5) {
             console.log(`⚠️ [${cycle}] Buy not filled (amt=${buyFilledAmount.toFixed(4)})`);
             results.push({ t: cycle, s: best.symbol, a: 'nofill' });

@@ -611,7 +611,10 @@ serve(async (req) => {
           if (!market) continue;
           
           const sellAmount = (pos.amount * 0.998).toFixed(6);
-          const result = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount);
+          // Pass the market price so executeOrder's base-from-fill fallback
+          // (filled_total/avg) is live even if Gate omits filled_amount/avg on the
+          // sell — otherwise a real fill would be misread as unfilled (phantom long).
+          const result = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount, market.price);
           
           if (result.success) {
             const pnlUsd = pos.usdValue * (pnl / 100);
@@ -648,7 +651,7 @@ serve(async (req) => {
             if (!market) continue;
             
             const sellAmount = (decision.balance.available * 0.99).toFixed(6);
-            const result = await executeOrder(apiKey, apiSecret, symbol, 'sell', sellAmount);
+            const result = await executeOrder(apiKey, apiSecret, symbol, 'sell', sellAmount, market.price);
             
             if (result.success) {
               dustConverted += decision.freedAmount;
@@ -662,7 +665,7 @@ serve(async (req) => {
             
             // Sell current position
             const sellAmount = (pos.amount * 0.998).toFixed(6);
-            const sellResult = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount);
+            const sellResult = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount, markets.find(m => m.symbol === pos.symbol)?.price || pos.entryPrice);
             
             if (sellResult.success) {
               const pnlUsd = pos.usdValue * (pos.pnlPercent / 100);
@@ -709,7 +712,7 @@ serve(async (req) => {
             if (!market) continue;
             
             const sellAmount = (pos.amount * 0.998).toFixed(6);
-            const result = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount);
+            const result = await executeOrder(apiKey, apiSecret, pos.symbol, 'sell', sellAmount, market.price);
             
             if (result.success) {
               const pnlUsd = pos.usdValue * (pos.pnlPercent / 100);

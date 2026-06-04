@@ -98,6 +98,32 @@ live path (`autonomous-orchestrator`) was never affected — it uses **limit** b
 where base units are correct. Long-term, F4 (collapse to one executor) removes the
 duplication that let this drift across engines.
 
+### 🔎 F10 — Follow-up code-review round on the F8/F9 fixes
+A second review of the F8/F9 diff caught regressions/gaps the first pass left:
+- **Phantom-fill via fallback (FIXED):** `master-brain`/`ultimate-trader` derived
+  the buy base as `q = filled_total || parseFloat(amount)`. The `|| amount`
+  fallback re-opened the phantom-fill hole — an unfilled LIVE market buy
+  (`filled_total=0`) read back the submitted quote and opened a phantom position.
+  Now uses `filled_total` only (DRY_RUN synthetics still populate it).
+- **DRY_RUN base mis-read (FIXED):** `hyper-engine` read the synthetic order's
+  `filled_amount`, which echoes the submitted *quote* for a market buy, so the
+  simulated sell was sized wrong by a factor of price. Now derives base as
+  `filled_total / price` (correct in LIVE and DRY_RUN).
+- **Dead sell fallback (FIXED):** `master-brain` sell calls omitted `refPrice`, so
+  the `filled_total/avg` base fallback was dead (avg=0) — a real fill that returned
+  only `filled_total` would be misread as unfilled, leaving a phantom long. All
+  sell sites now pass a market price.
+- **Settings blind-overwrite (FIXED):** the orchestrator's `updateDBState` now
+  *merges* the `settings` JSON onto the freshly-read row instead of overwriting it
+  from a stale snapshot, so the day-start anchor write can't clobber concurrent
+  keys (and the daily-loss breaker can't be silently re-anchored).
+- **Partial-fill exit accounting:** `micro-scalper` exit now books P&L on the size
+  actually sold and keeps the residual open (FIXED). `master-brain` exit/swap/dust
+  sells still book the full position (mark-to-market `pos.usdValue*pnl%`) on a
+  partial fill — left as-is (DEFERRED): the proportional rework across its four
+  heterogeneous sell sites needs runtime fill data to verify, and IOC partials are
+  low-probability. The orchestrator (primary path) is unaffected.
+
 ### 🟡 F9 — Phantom IOC fills in legacy scalpers — dangerous paths FIXED
 `micro-scalper`, `rapid-trader`, `continuous-trader` treated an IOC order as fully
 filled when only an `id` (or a `filled_amount || amount` fallback) was present.

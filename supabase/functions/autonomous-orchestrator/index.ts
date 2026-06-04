@@ -320,8 +320,21 @@ async function getDBState() {
 async function updateDBState(updates: Record<string, unknown>) {
   const { data } = await supabase.from('trading_system_state').select('*').limit(1).single();
   if (data) {
+    // MERGE the `settings` JSON onto the freshly-read row instead of overwriting
+    // it. Callers pass only the keys they intend to change; a blind overwrite from
+    // a stale in-memory snapshot would clobber keys another writer set in between
+    // (e.g. lastWsTickMs) and could even drop dayStartBalance — silently resetting
+    // the daily-loss breaker (INV-02). This is a read-merge-write, not atomic, but
+    // it stops the snapshot from reverting concurrent settings keys.
+    const merged: Record<string, unknown> = { ...updates };
+    if (updates.settings && typeof updates.settings === 'object') {
+      merged.settings = {
+        ...((data.settings ?? {}) as Record<string, unknown>),
+        ...(updates.settings as Record<string, unknown>),
+      };
+    }
     await supabase.from('trading_system_state').update({
-      ...updates,
+      ...merged,
       last_heartbeat: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', data.id);
@@ -1105,7 +1118,8 @@ async function runEliteCycle(): Promise<{
     // First cycle of the (Jerusalem) day: anchor to current equity and persist
     // it so every later cycle measures real intra-day P&L against the same base.
     state.dayStartBalance = totalValue;
-    await updateDBState({ settings: { ...__settings, dayKey, dayStartBalance: totalValue } });
+    // Pass only the keys we own; updateDBState merges them onto the fresh row.
+    await updateDBState({ settings: { dayKey, dayStartBalance: totalValue } });
   }
   state.dailyPnL = totalValue - state.dayStartBalance;
   state.dailyPnLPercent = state.dayStartBalance > 0 ? state.dailyPnL / state.dayStartBalance : 0;
