@@ -103,3 +103,30 @@ export async function getGateCredentials(supabase?: DbClient): Promise<GateCrede
   }
   throw new Error("No Gate.io credentials configured (set env vars or save them in the dashboard)");
 }
+
+/**
+ * Make Gate.io credentials available via Deno.env for engines that read
+ * GATE_API_KEY/GATE_API_SECRET directly. Resolves env-first; only when env is
+ * unset does it load the encrypted DB row (the dashboard path) and inject it
+ * into the process env for this isolate.
+ *
+ * WORST-CASE-SAFE: if env keys are already present it is a no-op (env wins, so
+ * existing setups are byte-for-byte unaffected); if no credentials exist
+ * anywhere, it swallows the error and leaves env untouched, so the caller
+ * behaves exactly as before. Returns true iff credentials are now in env.
+ */
+export async function hydrateGateEnvFromDb(supabase?: DbClient): Promise<boolean> {
+  if (Deno.env.get("GATE_API_KEY") && Deno.env.get("GATE_API_SECRET")) return true;
+  try {
+    const c = await getGateCredentials(supabase);
+    if (c.apiKey && c.apiSecret) {
+      Deno.env.set("GATE_API_KEY", c.apiKey);
+      Deno.env.set("GATE_API_SECRET", c.apiSecret);
+      return true;
+    }
+  } catch {
+    // No credentials configured anywhere yet — leave env as-is; the engine will
+    // report "not configured" exactly as it did before this helper existed.
+  }
+  return false;
+}

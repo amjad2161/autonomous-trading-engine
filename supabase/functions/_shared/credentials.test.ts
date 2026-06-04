@@ -2,7 +2,7 @@
 
 import { assert, assertEquals, assertRejects } from "./_test_assert.ts";
 import {
-  decryptSecret, encryptSecret, getGateCredentials, loadStoredCredentials, storeCredentials, type DbClient,
+  decryptSecret, encryptSecret, getGateCredentials, hydrateGateEnvFromDb, loadStoredCredentials, storeCredentials, type DbClient,
 } from "./credentials.ts";
 
 // In-memory fake of the bits of the Supabase client we use.
@@ -63,4 +63,30 @@ Deno.test("getGateCredentials: falls back to DB when env absent", async () => {
 Deno.test("getGateCredentials: throws when nothing configured", async () => {
   resetEnv();
   await assertRejects(() => getGateCredentials());
+});
+
+Deno.test("hydrateGateEnvFromDb: no-op when env already set (DB never touched)", async () => {
+  resetEnv();
+  Deno.env.set("GATE_API_KEY", "env-key");
+  Deno.env.set("GATE_API_SECRET", "env-secret");
+  // A client that would throw if used — proves env short-circuits before any DB read.
+  const throwingDb = { from: () => { throw new Error("DB must not be touched"); } } as unknown as DbClient;
+  assertEquals(await hydrateGateEnvFromDb(throwingDb), true);
+  assertEquals(Deno.env.get("GATE_API_KEY"), "env-key");
+});
+
+Deno.test("hydrateGateEnvFromDb: injects DB credentials into env when env absent", async () => {
+  resetEnv();
+  Deno.env.set("FUNCTION_SHARED_SECRET", "the-master");
+  const db = fakeClient();
+  await storeCredentials(db, "db-key", "db-secret");
+  assertEquals(await hydrateGateEnvFromDb(db), true);
+  assertEquals(Deno.env.get("GATE_API_KEY"), "db-key");
+  assertEquals(Deno.env.get("GATE_API_SECRET"), "db-secret");
+});
+
+Deno.test("hydrateGateEnvFromDb: safe no-op (returns false, env untouched) when nothing configured", async () => {
+  resetEnv();
+  assertEquals(await hydrateGateEnvFromDb(), false);
+  assertEquals(Deno.env.get("GATE_API_KEY"), undefined);
 });
