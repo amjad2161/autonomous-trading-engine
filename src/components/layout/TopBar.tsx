@@ -15,7 +15,7 @@ import {
 // All pairs we need for portfolio valuation
 const ALL_PAIRS = [
   'BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'DOGE_USDT', 'ADA_USDT',
-  'AVAX_USDT', 'DOT_USDT', 'LINK_USDT', 'MATIC_USDT', 'UNI_USDT', 'ATOM_USDT',
+  'AVAX_USDT', 'DOT_USDT', 'LINK_USDT', 'POL_USDT', 'UNI_USDT', 'ATOM_USDT',
   'LTC_USDT', 'BCH_USDT', 'NEAR_USDT', 'APT_USDT', 'OP_USDT', 'ARB_USDT'
 ];
 

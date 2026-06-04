@@ -131,7 +131,13 @@ class GateWebSocketManager {
 
       // Handle subscription acknowledgment
       if (data.event === 'subscribe') {
-        console.log(`[GateWS] Subscribed to ${data.channel}:`, data.result?.status);
+        if (data.error || data.result?.status === 'fail') {
+          // Surface Gate's actual reason (e.g. an unknown/delisted pair fails the
+          // whole subscription) instead of a bare "fail".
+          console.error(`[GateWS] Subscribe FAILED for ${data.channel}:`, data.error || data.result);
+        } else {
+          console.log(`[GateWS] Subscribed to ${data.channel}:`, data.result?.status);
+        }
         return;
       }
 

@@ -35,7 +35,7 @@ import { useToast } from "@/hooks/use-toast";
 
 const POPULAR_PAIRS = [
   "BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "DOGE_USDT",
-  "ADA_USDT", "AVAX_USDT", "DOT_USDT", "MATIC_USDT", "LINK_USDT"
+  "ADA_USDT", "AVAX_USDT", "DOT_USDT", "POL_USDT", "LINK_USDT"
 ];
 
 const STRATEGIES = [
